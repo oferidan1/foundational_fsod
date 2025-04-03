@@ -384,7 +384,7 @@ class Transformer(nn.Module):
             supporting_latents = supporting_latents.repeat(bs, 1, 1)
             for i in range(0, supporting_latents.shape[1], 3):
                 #tgt3 = torch.cat((supporting_latents[:,:3,:], tgt[:,3:,:]), dim=1)
-                tgt3 = supporting_latents[:,:3,:]
+                tgt3 = supporting_latents[:,i:i+3,:]
                 hs_fs_i, references_fs_i = self.decoder(
                     tgt=tgt3.transpose(0, 1),
                     memory=memory.transpose(0, 1),

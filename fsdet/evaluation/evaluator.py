@@ -191,8 +191,9 @@ def prepare_image_for_GDINO(input, device = "cuda"):
     image_transformed = image_transformed.to(device)
     return image_transformed[None], image
 
+# fs_gdino
+# run gdino model with params
 embed_idx = {}
-
 def run_gdino(model, inputs, text_prompt_list, positive_map_list):
     K = 100
     length = 81
@@ -335,13 +336,15 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
             if idx == num_warmup:
                 start_time = time.time()
                 total_compute_time = 0
-                        
+            
+            # if open set prompt - call open detector, gdino              
             if text_prompt_list == None:                     
                 start_compute_time = time.time()       
                 outputs = model(inputs)
                 torch.cuda.synchronize()
                 total_compute_time += time.time() - start_compute_time            
             else:
+                # fs_gdino
                 outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list)
                 total_compute_time += compute_time
                 
