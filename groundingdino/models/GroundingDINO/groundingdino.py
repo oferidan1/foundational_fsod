@@ -203,16 +203,22 @@ class GroundingDINO(nn.Module):
 
         self._reset_parameters()
         
-        #ofer: load cached queries latent
+        # fs_gdino
+        # load cached queries latent
         is_cached_latents = True
         #self.supporting_latents = defaultdict(list)
         self.supporting_latents = []
+        #common classes - exlude from supporting keys
+        voc_classes_to_exlude = ['0', '1']
         if is_cached_latents:
             filename = 'cluster_centers.p'   
             with open(filename, 'rb') as fp:
                 d = pickle.load(fp)
             supporting_keys = []
             for key, v_list in d.items():
+                #common classes - exlude from supporting keys
+                if key in voc_classes_to_exlude:
+                    continue
                 queries = []
                 for v in v_list:
                     q = torch.load(v)
@@ -221,8 +227,7 @@ class GroundingDINO(nn.Module):
                 queries = torch.cat(queries, dim=0)
                 self.supporting_latents.append(queries)
             self.supporting_latents = torch.cat(self.supporting_latents, dim=0)
-            self.supporting_classes = np.array(supporting_keys)
-            
+            self.supporting_classes = np.array(supporting_keys)            
 
     def _reset_parameters(self):
         # init input_proj
@@ -333,6 +338,11 @@ class GroundingDINO(nn.Module):
                 masks.append(mask)
                 poss.append(pos_l)
 
+        # fs_gdino
+         # transformer decoder is done 2 times: 
+         # 1. regular: with learnt 900 queries
+         # 2. fs: with supporting latents queries
+         # outpus is: hs_fs, reference_fs
         input_query_bbox = input_query_label = attn_mask = dn_meta = None
         hs, reference, hs_enc, ref_enc, init_box_proposal, queries, hs_fs, reference_fs = self.transformer(
             srcs, masks, input_query_bbox, poss, input_query_label, attn_mask, text_dict, self.supporting_latents
@@ -360,8 +370,9 @@ class GroundingDINO(nn.Module):
         outputs_classes = outputs_class[-1]
         outputs_coords = outputs_coord_list[-1]
         # fs_gdino
+        # if leart queries executed, hs_fs exists
         if hs_fs is not []:
-            fs_box_iou_thr = 0.9
+            fs_box_iou_thr = kw["iou_thr"]
             # deformable-detr-like anchor update
             outputs_coord_list_fs = []
             for dec_lid, (layer_ref_sig, layer_bbox_embed, layer_hs) in enumerate(
@@ -373,15 +384,15 @@ class GroundingDINO(nn.Module):
                 layer_outputs_unsig = layer_delta_unsig + inverse_sigmoid(layer_ref_sig[:,:self.supporting_latents.shape[0],:])
                 layer_outputs_unsig = layer_outputs_unsig.sigmoid()
                 outputs_coord_list_fs.append(layer_outputs_unsig)
-            outputs_coord_list_fs = torch.stack(outputs_coord_list_fs)
+            outputs_coord_list_fs = torch.stack(outputs_coord_list_fs)            
             
-            # take the coordinates of supporting box and for each supporting box find the max iou box in the original list
-            # if iou > thr , save the index and class id
             supporting_box_coords = outputs_coord_list_fs[-1]
             iscrowd = [int(False)] * supporting_box_coords.shape[1]
+            # take the coordinates of supporting box and for each supporting box find the max iou box in the original list
+            # if iou > thr , save the index and class id
             ious = mask_utils.iou(outputs_coords.squeeze(0).tolist(), supporting_box_coords.squeeze(0).tolist(), iscrowd)
             # we find matching box between fs boxes and original boxes > threshold
-            # the idx of original boxes
+            # the idx of original boxes is in axis=1
             original_matched_boxes_idx = np.where(ious.max(axis=1)>fs_box_iou_thr)[0]
             supporting_max_boxes_idx = ious.argmax(axis=1)[original_matched_boxes_idx]
             # class of supporting matching box

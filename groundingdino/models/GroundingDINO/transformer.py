@@ -381,16 +381,20 @@ class Transformer(nn.Module):
         # supporting_latents is a ternsor of shape number_of_classes x K x 256 which provides K latents of class boxes from pre-trained gdino encoder
         if supporting_latents is not None:
             bs = tgt.shape[0]
+            # sf_K : K is the number of supporting latents per class
+            sf_K = 3
             supporting_latents = supporting_latents.repeat(bs, 1, 1)
-            for i in range(0, supporting_latents.shape[1], 3):
-                #tgt3 = torch.cat((supporting_latents[:,:3,:], tgt[:,3:,:]), dim=1)
-                tgt3 = supporting_latents[:,i:i+3,:]
+            #loop over supporting_latents, each time take only the per class K latenets
+            for i in range(0, supporting_latents.shape[1], sf_K):
+                #tgt_K = torch.cat((supporting_latents[:,i:i+sf_K,:], tgt[:,sf_K:,:]), dim=1)
+                #build queries of K latents per class
+                tgt_K = supporting_latents[:,i:i+sf_K,:]
                 hs_fs_i, references_fs_i = self.decoder(
-                    tgt=tgt3.transpose(0, 1),
+                    tgt=tgt_K.transpose(0, 1),
                     memory=memory.transpose(0, 1),
                     memory_key_padding_mask=mask_flatten,
                     pos=lvl_pos_embed_flatten.transpose(0, 1),
-                    refpoints_unsigmoid=refpoint_embed[:,:3,:].transpose(0, 1),
+                    refpoints_unsigmoid=refpoint_embed[:,:sf_K,:].transpose(0, 1),
                     level_start_index=level_start_index,
                     spatial_shapes=spatial_shapes,
                     valid_ratios=valid_ratios,
@@ -399,10 +403,10 @@ class Transformer(nn.Module):
                     text_attention_mask=~text_dict["text_token_mask"],
                     # we ~ the mask . False means use the token; True means pad the token
                 )            
-                hs_fs_i_ = [hs_fs_i[0][:,:3,:],hs_fs_i[1][:,:3,:],hs_fs_i[2][:,:3,:],hs_fs_i[3][:,:3,:],hs_fs_i[4][:,:3,:],hs_fs_i[5][:,:3,:]]
+                hs_fs_i_ = [hs_fs_i[0][:,:sf_K,:],hs_fs_i[1][:,:sf_K,:],hs_fs_i[2][:,:sf_K,:],hs_fs_i[3][:,:sf_K,:],hs_fs_i[4][:,:sf_K,:],hs_fs_i[5][:,:sf_K,:]]
                 hs_fs_i_ = torch.cat(hs_fs_i_, dim=0)
                 hs_fs.append(hs_fs_i_)
-                references_fs_i_ = [references_fs_i[0][:,:3,:],references_fs_i[1][:,:3,:],references_fs_i[2][:,:3,:],references_fs_i[3][:,:3,:],references_fs_i[4][:,:3,:],references_fs_i[5][:,:3,:]]
+                references_fs_i_ = [references_fs_i[0][:,:sf_K,:],references_fs_i[1][:,:sf_K,:],references_fs_i[2][:,:sf_K,:],references_fs_i[3][:,:sf_K,:],references_fs_i[4][:,:sf_K,:],references_fs_i[5][:,:sf_K,:]]
                 references_fs_i_ = torch.cat(references_fs_i_, dim=0)
                 references_fs.append(references_fs_i_)
             hs_fs = torch.cat(hs_fs, dim=1)#.unsqueeze(0)

@@ -194,13 +194,13 @@ def prepare_image_for_GDINO(input, device = "cuda"):
 # fs_gdino
 # run gdino model with params
 embed_idx = {}
-def run_gdino(model, inputs, text_prompt_list, positive_map_list):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, iou_thr=0.7):
     K = 100
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
     start_compute_time = time.time()
     with torch.no_grad():
-        outputs = model(image, captions = text_prompt_list)
+        outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr)
     torch.cuda.synchronize()
     total_compute_time = time.time() - start_compute_time
     out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
