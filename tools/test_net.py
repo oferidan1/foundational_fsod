@@ -132,7 +132,8 @@ def setup(args):
 
 
 def main(args):
-    VOC_CLASSES = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']  # fmt: skip
+    #VOC_CLASSES_WRONG_CLASSES = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']  # fmt: skip
+    VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
     COCO_CLASSES_ALL = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
     COCO_CLASSES_NOVEL = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'boat', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'bottle', 'chair', 'couch', 'potted plant', 'dining table', 'tv']
     COCO_CLASSES_BASE = ['truck','traffic light','fire hydrant','stop sign','parking meter','bench','elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','bed','toilet','laptop','mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush']
@@ -140,8 +141,12 @@ def main(args):
     cfg = setup(args)
     if args.eval_only:
         model = Trainer.build_model(cfg)
-        gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
-        model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint)        
+        is_gdino_model = args.is_gdino
+        is_supporting_latents = args.is_sl
+        
+        if is_gdino_model:
+            gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
+            model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, is_supporting_latents)        
         if args.eval_iter != -1:
             # load checkpoint at specified iteration
             ckpt_file = os.path.join(
@@ -155,14 +160,22 @@ def main(args):
         DetectionCheckpointer(model, save_dir=cfg.OUTPUT_DIR).resume_or_load(
             ckpt_file, resume=resume
         )
-        device = 'cuda'
-        model = model.to(device)
-        tokenizer = model.tokenizer
-        class_len_per_prompt = 81
-        text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)
-        #text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(COCO_CLASSES_NOVEL, tokenizer, class_len_per_prompt)
-        res = Trainer.test(cfg, model, text_prompt_list, positive_map_list)
-        #res = Trainer.test(cfg, model)
+        
+        if is_gdino_model:
+            device = 'cuda'
+            model = model.to(device)
+            tokenizer = model.tokenizer
+            class_len_per_prompt = 81
+            if args.data_source=='voc':
+                dataset_classes = VOC_CLASSES
+            elif args.data_source=='coco':
+                dataset_classes = COCO_CLASSES_ALL #COCO_CLASSES_NOVEL
+            text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(dataset_classes, tokenizer, class_len_per_prompt)
+            #text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(COCO_CLASSES_NOVEL, tokenizer, class_len_per_prompt)
+            res = Trainer.test(cfg, model, text_prompt_list, positive_map_list)
+        else:
+            res = Trainer.test(cfg, model)
+            
         if comm.is_main_process():
             verify_results(cfg, res)
             # save evaluation results in json

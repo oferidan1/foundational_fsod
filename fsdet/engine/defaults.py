@@ -63,12 +63,15 @@ def default_argument_parser():
     parser = argparse.ArgumentParser(description="FsDet Training")
     parser.add_argument(
         "--config-file",
-        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_base1.yaml",
-        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_10shot.yaml",        
+        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
+        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_3shot.yaml",        
         #default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_novel_30shot.yaml",
         metavar="FILE",
         help="path to config file",
     )
+    parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
+    parser.add_argument("--is_sl", type=int, default=1, help="is supporting latents DB for gdino")
+    parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
     parser.add_argument(
         "--resume",
         action="store_true",

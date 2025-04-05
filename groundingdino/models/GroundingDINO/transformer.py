@@ -379,7 +379,7 @@ class Transformer(nn.Module):
         references_fs = []
         # fs_gdino
         # supporting_latents is a ternsor of shape number_of_classes x K x 256 which provides K latents of class boxes from pre-trained gdino encoder
-        if supporting_latents is not None:
+        if supporting_latents != []:
             bs = tgt.shape[0]
             # sf_K : K is the number of supporting latents per class
             sf_K = 3

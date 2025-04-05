@@ -77,6 +77,7 @@ class GroundingDINO(nn.Module):
         text_encoder_type="bert-base-uncased",
         sub_sentence_present=True,
         max_text_len=256,
+        is_supporting_latents=True,
     ):
         """Initializes the model.
         Parameters:
@@ -205,20 +206,19 @@ class GroundingDINO(nn.Module):
         
         # fs_gdino
         # load cached queries latent
-        is_cached_latents = True
         #self.supporting_latents = defaultdict(list)
-        self.supporting_latents = []
-        #common classes - exlude from supporting keys
-        voc_classes_to_exlude = ['0', '1']
-        if is_cached_latents:
+        self.supporting_latents = []        
+        if is_supporting_latents:
+            #common classes - exlude from supporting keys
+            #voc_classes_to_exlude = ['0', '1']
             filename = 'cluster_centers.p'   
             with open(filename, 'rb') as fp:
                 d = pickle.load(fp)
             supporting_keys = []
             for key, v_list in d.items():
                 #common classes - exlude from supporting keys
-                if key in voc_classes_to_exlude:
-                    continue
+                # if key in voc_classes_to_exlude:
+                #     continue
                 queries = []
                 for v in v_list:
                     q = torch.load(v)
@@ -369,9 +369,11 @@ class GroundingDINO(nn.Module):
         
         outputs_classes = outputs_class[-1]
         outputs_coords = outputs_coord_list[-1]
+        original_matched_boxes_idx = []
+        original_matched_boxes_classes = []
         # fs_gdino
         # if leart queries executed, hs_fs exists
-        if hs_fs is not []:
+        if hs_fs != []:
             fs_box_iou_thr = kw["iou_thr"]
             # deformable-detr-like anchor update
             outputs_coord_list_fs = []
@@ -468,6 +470,7 @@ def build_groundingdino(args):
         text_encoder_type=args.text_encoder_type,
         sub_sentence_present=sub_sentence_present,
         max_text_len=args.max_text_len,
+        is_supporting_latents=args.is_supporting_latents
     )
 
     return model
