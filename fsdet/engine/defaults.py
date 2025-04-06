@@ -71,7 +71,7 @@ def default_argument_parser():
         help="path to config file",
     )
     parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
-    parser.add_argument("--is_sl", type=int, default=1, help="is supporting latents DB for gdino")
+    parser.add_argument("--is_sl", type=int, default=0, help="is supporting latents DB for gdino")
     parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument(
