@@ -395,10 +395,17 @@ class GroundingDINO(nn.Module):
             ious = mask_utils.iou(outputs_coords.squeeze(0).tolist(), supporting_box_coords.squeeze(0).tolist(), iscrowd)
             # we find matching box between fs boxes and original boxes > threshold
             # the idx of original boxes is in axis=1
-            original_matched_boxes_idx = np.where(ious.max(axis=1)>fs_box_iou_thr)[0]
+            # original_matched_boxes_idx = np.where(ious.max(axis=1)>fs_box_iou_thr)[0]
+            original_matched_boxes_idx = ious.argmax(axis=0)
+            original_matched_boxes_idx = original_matched_boxes_idx[ious[original_matched_boxes_idx,:].max(axis=1)>fs_box_iou_thr]            
             supporting_max_boxes_idx = ious.argmax(axis=1)[original_matched_boxes_idx]
+            
             # class of supporting matching box
-            original_matched_boxes_classes = self.supporting_classes[supporting_max_boxes_idx]
+            original_matched_boxes_classes = []
+            if len(supporting_max_boxes_idx):
+                original_matched_boxes_classes = self.supporting_classes[supporting_max_boxes_idx]
+            else:
+                print('no match')
 
             # # output
             # outputs_class_fs = torch.stack(
