@@ -194,7 +194,7 @@ def prepare_image_for_GDINO(input, device = "cuda"):
 # fs_gdino
 # run gdino model with params
 embed_idx = {}
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, iou_thr=0.7):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, fs_create_embedding, iou_thr=0.7):
     K = 100
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -269,7 +269,6 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, iou_thr=0.7):
     final_outputs.append(curr_output)           
     
     #ofer: novel bbox check    
-    fs_create_embedding = False
     fs_create_embedding_iou = 0.6
     if fs_create_embedding:    
         global embed_idx
@@ -296,7 +295,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, iou_thr=0.7):
     
     return final_outputs, total_compute_time
 
-def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator):
+def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, args):
     """
     Run model on the data_loader and evaluate the metrics with evaluator.
     The model will be used in eval mode.
@@ -345,7 +344,7 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list)
+                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs)
                 total_compute_time += compute_time
                 
             evaluator.process(inputs, outputs)

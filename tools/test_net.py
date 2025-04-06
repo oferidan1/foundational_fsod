@@ -172,9 +172,9 @@ def main(args):
                 dataset_classes = COCO_CLASSES_ALL #COCO_CLASSES_NOVEL
             text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(dataset_classes, tokenizer, class_len_per_prompt)
             #text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(COCO_CLASSES_NOVEL, tokenizer, class_len_per_prompt)
-            res = Trainer.test(cfg, model, text_prompt_list, positive_map_list)
+            res = Trainer.test(cfg, model, args, text_prompt_list, positive_map_list)
         else:
-            res = Trainer.test(cfg, model)
+            res = Trainer.test(cfg, model, args)
             
         if comm.is_main_process():
             verify_results(cfg, res)

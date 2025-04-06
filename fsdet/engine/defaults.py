@@ -66,12 +66,14 @@ def default_argument_parser():
         default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
         #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_3shot.yaml",        
         #default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_novel_30shot.yaml",
+        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_base1.yaml",
         metavar="FILE",
         help="path to config file",
     )
     parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
-    parser.add_argument("--is_sl", type=int, default=1, help="is supporting latents DB for gdino")
+    parser.add_argument("--is_sl", type=int, default=0, help="is supporting latents DB for gdino")
     parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
+    parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -535,7 +537,7 @@ class DefaultTrainer(SimpleTrainer):
         )
 
     @classmethod
-    def test(cls, cfg, model, text_prompt_list=None, positive_map_list=None, evaluators=None):
+    def test(cls, cfg, model, args, text_prompt_list=None, positive_map_list=None, evaluators=None):
         """
         Args:
             cfg (CfgNode):
@@ -557,10 +559,16 @@ class DefaultTrainer(SimpleTrainer):
 
         results = OrderedDict()
         #ofer : TRAIN / TEST datasets
-        for idx, dataset_name in enumerate(cfg.DATASETS.TEST):
-            data_loader = cls.build_test_loader(cfg, dataset_name)
-        #for idx, dataset_name in enumerate(cfg.DATASETS.TRAIN):            
-            #data_loader = cls.build_train_loader(cfg)
+        dataset_mode = cfg.DATASETS.TEST
+        if args.is_create_fs:
+            dataset_mode = cfg.DATASETS.TRAIN            
+            cfg['DATALOADER']['ASPECT_RATIO_GROUPING'] = False
+            
+        for idx, dataset_name in enumerate(dataset_mode):
+            if args.is_create_fs:
+                data_loader = cls.build_train_loader(cfg)
+            else:
+                data_loader = cls.build_test_loader(cfg, dataset_name)            
             # When evaluators are passed in as arguments,
             # implicitly assume that evaluators can be created before data_loader.
             if evaluators is not None:
@@ -575,7 +583,7 @@ class DefaultTrainer(SimpleTrainer):
                     )
                     results[dataset_name] = {}
                     continue
-            results_i = inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator)
+            results_i = inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, args)
             #results_i = inference_on_dataset(model, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():
