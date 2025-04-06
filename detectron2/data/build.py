@@ -346,11 +346,12 @@ def build_batch_data_loader(
     logger = logging.getLogger(__name__)
     logger.info("Making batched data loader with batch_size=%d", batch_size)
     
-    #ofer - undo
-    if isinstance(dataset, torchdata.IterableDataset):
-        assert sampler is None, "sampler must be None if dataset is IterableDataset"
-    else:
-        dataset = ToIterableDataset(dataset, sampler, shard_chunk_size=batch_size)
+    #ofer - disable for train data generation ?
+    if aspect_ratio_grouping:
+        if isinstance(dataset, torchdata.IterableDataset):
+            assert sampler is None, "sampler must be None if dataset is IterableDataset"
+        else:
+            dataset = ToIterableDataset(dataset, sampler, shard_chunk_size=batch_size)
 
     generator = None
     if seed is not None:
@@ -563,7 +564,8 @@ def build_detection_train_loader(
             by the ``mapper``.
     """
     
-    #aspect_ratio_grouping = False #ofer
+    #ofer : set False to train dataset creation
+    #aspect_ratio_grouping = False
     if isinstance(dataset, list):
         dataset = DatasetFromList(dataset, copy=False)
     if mapper is not None:
