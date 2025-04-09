@@ -558,6 +558,7 @@ class DefaultTrainer(SimpleTrainer):
             ), "{} != {}".format(len(cfg.DATASETS.TEST), len(evaluators))
 
         results = OrderedDict()
+        #fs_gdino
         #ofer : TRAIN / TEST datasets
         dataset_mode = cfg.DATASETS.TEST
         if args.is_create_fs:
@@ -569,6 +570,7 @@ class DefaultTrainer(SimpleTrainer):
                 data_loader = cls.build_train_loader(cfg)
             else:
                 data_loader = cls.build_test_loader(cfg, dataset_name)            
+            
             # When evaluators are passed in as arguments,
             # implicitly assume that evaluators can be created before data_loader.
             if evaluators is not None:

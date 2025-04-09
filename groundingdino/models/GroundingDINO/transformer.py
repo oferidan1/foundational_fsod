@@ -385,16 +385,17 @@ class Transformer(nn.Module):
             sf_K = 3
             supporting_latents = supporting_latents.repeat(bs, 1, 1)
             #loop over supporting_latents, each time take only the per class K latenets
-            for i in range(0, supporting_latents.shape[1], sf_K):
-                #tgt_K = torch.cat((supporting_latents[:,i:i+sf_K,:], tgt[:,sf_K:,:]), dim=1)
+            for i in range(0, supporting_latents.shape[1], sf_K):                
                 #build queries of K latents per class
-                tgt_K = supporting_latents[:,i:i+sf_K,:]
+                tgt_K = torch.cat((supporting_latents[:,i:i+sf_K,:], tgt[:,sf_K:,:]), dim=1)
+                #tgt_K = supporting_latents[:,i:i+sf_K,:]
                 hs_fs_i, references_fs_i = self.decoder(
                     tgt=tgt_K.transpose(0, 1),
                     memory=memory.transpose(0, 1),
                     memory_key_padding_mask=mask_flatten,
                     pos=lvl_pos_embed_flatten.transpose(0, 1),
-                    refpoints_unsigmoid=refpoint_embed[:,:sf_K,:].transpose(0, 1),
+                    #refpoints_unsigmoid=refpoint_embed[:,:sf_K,:].transpose(0, 1),
+                    refpoints_unsigmoid=refpoint_embed.transpose(0, 1),
                     level_start_index=level_start_index,
                     spatial_shapes=spatial_shapes,
                     valid_ratios=valid_ratios,

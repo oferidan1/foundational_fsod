@@ -194,7 +194,7 @@ def prepare_image_for_GDINO(input, device = "cuda"):
 # fs_gdino
 # run gdino model with params
 embed_idx = {}
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, fs_create_embedding, iou_thr=0.7):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, iou_thr=0.7):
     K = 100
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -210,7 +210,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, fs_create_embe
     matched_boxes_classes = outputs["original_matched_boxes_classes"]    
     prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
     
-    thr_gain = 10    
+    thr_gain = 2    
     cat_batch_id = 0 #= fs_category_id // positive_map_list[0].shape[0]
     # fs_category_id = matched_boxes_classes
     # cat_offset_id = fs_category_id % positive_map_list[0].shape[0]
@@ -268,9 +268,10 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, fs_create_embe
     curr_output['instances'] = result
     final_outputs.append(curr_output)           
     
-    #ofer: novel bbox check    
+    # saving embedding of queries to file
+    # will be used later as few shots
     fs_create_embedding_iou = 0.6
-    if fs_create_embedding:    
+    if is_create_fs:    
         global embed_idx
         #novel category
         gts = []
@@ -282,17 +283,19 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, fs_create_embe
             print(len(gts))
         iscrowd = [int(False)] * len(gt_bboxes)
         ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
-        max_iou = ious[:,0].max()           
-        if max_iou > fs_create_embedding_iou:
-            idx = ious[:,0].argmax()   
-            target_embed = embeds[idx]
-            gt_class = gt_classes[0].item()
-            if gt_class not in embed_idx:
-                embed_idx[gt_class] = 0            
-            filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)
-            torch.save(target_embed, filename)
-            embed_idx[gt_class] += 1
-    
+        #loop over all bbox in gt
+        for i in range(ious.shape[1]):
+            max_iou = ious[:,i].max()     
+            gt_class = gt_classes[i].item()      
+            if max_iou > fs_create_embedding_iou:# or gt_class==7:
+                idx = ious[:,i].argmax()   
+                target_embed = embeds[idx]                
+                if gt_class not in embed_idx:
+                    embed_idx[gt_class] = 0            
+                filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)
+                torch.save(target_embed, filename)
+                embed_idx[gt_class] += 1
+        
     return final_outputs, total_compute_time
 
 def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, args):

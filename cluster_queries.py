@@ -16,16 +16,19 @@ for file in  files:
     #name = os.path.splitext(os.path.basename(file))[0]
     [c, idx, iou] = parse("queries/class{}_idx{}_iou{}.pt", file)
     d[c].append([file, float(iou)])
+    
+print(d)
 
 #perform kmeans ib latents
 K = 3
+iou_thr = 0.6
 for key, v_list in d.items():
     queries = []
     queries_files = []
     for v in v_list:
         q_file, q_iou = v
-        #add queries with iou > thr
-        if q_iou > 0.75:
+        #add queries with iou > iou_thr        
+        if q_iou > iou_thr:
             q = torch.load(q_file)
             queries.append(q.cpu().numpy())
             queries_files.append(q_file)
@@ -44,7 +47,7 @@ filename = 'cluster_centers.p'
 with open(filename, 'wb') as fp:
     pickle.dump(cluster_centers, fp, protocol=pickle.HIGHEST_PROTOCOL)
     
-# with open('data.p', 'rb') as fp:
+# with open(filename, 'rb') as fp:
 #     data = pickle.load(fp)
 
 
