@@ -310,19 +310,24 @@ class DefaultTrainer(SimpleTrainer):
         """
         # Assume these objects must be constructed in this order.
         model = self.build_model(cfg)
+        
+        ## gdino
+        is_gdino_model = True
+        if is_gdino_model:
+            gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
+            model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, False)                
+            for p in model.parameters():
+                p.requries_grad = False
+        ##
         optimizer = self.build_optimizer(cfg, model)
         data_loader = self.build_train_loader(cfg)
         
-        ## gdino
-        # gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
-        # self.model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint)   
-        
-        # device = 'cuda'
-        # self.model = self.model.to(device)
-        # tokenizer = self.model.tokenizer
-        # class_len_per_prompt = 81
-        # VOC_CLASSES = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']  # fmt: skip
-        # self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)     
+        device = 'cuda'
+        self.model = self.model.to(device)
+        tokenizer = self.model.tokenizer
+        class_len_per_prompt = 81
+        VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
+        self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)     
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
@@ -537,7 +542,7 @@ class DefaultTrainer(SimpleTrainer):
         )
 
     @classmethod
-    def test(cls, cfg, model, args, text_prompt_list=None, positive_map_list=None, evaluators=None):
+    def test(cls, cfg, model, args, text_prompt_list=None, positive_map_list=None, dataset_classes=None, evaluators=None):
         """
         Args:
             cfg (CfgNode):
@@ -585,7 +590,7 @@ class DefaultTrainer(SimpleTrainer):
                     )
                     results[dataset_name] = {}
                     continue
-            results_i = inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, args)
+            results_i = inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, dataset_classes, args)
             #results_i = inference_on_dataset(model, data_loader, evaluator)
             results[dataset_name] = results_i
             if comm.is_main_process():

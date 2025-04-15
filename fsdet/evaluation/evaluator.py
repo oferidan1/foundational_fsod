@@ -12,6 +12,9 @@ import transforms as T2
 import numpy as np
 from PIL import Image
 import pycocotools.mask as mask_utils
+from PIL import Image, ImageDraw, ImageFont
+import os
+from groundingdino.util.utils import clean_state_dict, get_phrases_from_posmap
 
 class DatasetEvaluator:
     """
@@ -189,18 +192,97 @@ def prepare_image_for_GDINO(input, device = "cuda"):
     image = np.asarray(image_src)
     image_transformed, _ = transform(image_src, None)
     image_transformed = image_transformed.to(device)
-    return image_transformed[None], image
+    return image_transformed[None], image_src
 
 # fs_gdino
+
+#visualiztion
+def plot_boxes_to_image(image_pil, tgt):
+    H, W = tgt["size"]
+    boxes = tgt["boxes"]
+    labels = tgt["labels"]
+    assert len(boxes) == len(labels), "boxes and labels must have same length"
+
+    draw = ImageDraw.Draw(image_pil)
+    mask = Image.new("L", image_pil.size, 0)
+    mask_draw = ImageDraw.Draw(mask)
+
+    # draw boxes and masks
+    for box, label in zip(boxes, labels):
+        # from 0..1 to 0..W, 0..H
+        #box = box * torch.Tensor([W, H, W, H])
+        # from xywh to xyxy
+        #box[:2] -= box[2:] / 2
+        #box[2:] += box[:2]
+        # random color
+        color = tuple(np.random.randint(0, 255, size=3).tolist())
+        # draw
+        x0, y0, x1, y1 = box
+        x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
+
+        draw.rectangle([x0, y0, x1, y1], outline=color, width=6)
+        # draw.text((x0, y0), str(label), fill=color)
+
+        font = ImageFont.load_default()
+        if hasattr(font, "getbbox"):
+            bbox = draw.textbbox((x0, y0), str(label), font)
+        else:
+            w, h = draw.textsize(str(label), font)
+            bbox = (x0, y0, w + x0, y0 + h)
+        # bbox = draw.textbbox((x0, y0), str(label))
+        draw.rectangle(bbox, fill=color)
+        draw.text((x0, y0), str(label), fill="white")
+
+        mask_draw.rectangle([x0, y0, x1, y1], fill=255, width=6)
+
+    return image_pil, mask
+
+def do_gdino_visualization(model, caption, image_pil, filename, scores, boxes, labels, dataset_classes):
+    text_threshold = 0.15
+    box_threshold = 0.2
+    logits_filt = scores.cpu().clone()
+    boxes_filt = boxes.cpu().clone()
+    labels_filt = labels.cpu().clone()
+    filt_mask = scores > box_threshold
+    logits_filt = logits_filt[filt_mask]  # num_filt, 256
+    boxes_filt = boxes_filt[filt_mask]  # num_filt, 4
+    labels_filt = labels_filt[filt_mask]
+    # get phrase
+    tokenlizer = model.tokenizer
+    tokenized = tokenlizer(caption)
+    # build pred
+    pred_phrases = []
+    for logit, box, label in zip(logits_filt, boxes_filt, labels_filt):
+        pred_phrases.append(dataset_classes[label] + f"({str(logit.max().item())[:4]})")
+            
+     # visualize pred
+    size = image_pil.size
+    pred_dict = {
+        "boxes": boxes_filt,
+        "size": [size[1], size[0]],  # H,W
+        "labels": pred_phrases,
+    }    
+        
+    image_with_box = plot_boxes_to_image(image_pil, pred_dict)[0]
+    
+    name = os.path.basename(filename)
+    output_dir = 'visualization'
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    image_with_box.save(os.path.join(output_dir, name))
+
 # run gdino model with params
 embed_idx = {}
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, iou_thr=0.7):
-    K = 100
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, dataset_classes, iou_thr=0.7):
+    #K = 100
+    K = 900
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
     start_compute_time = time.time()
+    filename = os.path.basename(inputs[0]["file_name"])
     with torch.no_grad():
-        outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr)
+        outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr, filename=filename)
     torch.cuda.synchronize()
     total_compute_time = time.time() - start_compute_time
     out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
@@ -210,7 +292,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     matched_boxes_classes = outputs["original_matched_boxes_classes"]    
     prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
     
-    thr_gain = 2    
+    thr_gain = 10
     cat_batch_id = 0 #= fs_category_id // positive_map_list[0].shape[0]
     # fs_category_id = matched_boxes_classes
     # cat_offset_id = fs_category_id % positive_map_list[0].shape[0]
@@ -228,8 +310,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         class_id = matched_boxes_classes[i]
         cat_offset_id = class_id % positive_map_list[0].shape[0]
         cat_id = torch.where(positive_map_list[cat_batch_id][cat_offset_id]>0)[0]
-        prob_to_token[cat_batch_id,box_id, cat_id] = prob_to_token[cat_batch_id,box_id, cat_id] * thr_gain
-             
+        prob_to_token[cat_batch_id,box_id, cat_id] = prob_to_token[cat_batch_id,box_id, cat_id] * thr_gain             
     
     prob_to_label_list = []    
     for i in range(prob_to_token.shape[0]):
@@ -268,9 +349,12 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     curr_output['instances'] = result
     final_outputs.append(curr_output)           
     
+    #visualization
+    #do_gdino_visualization(model, text_prompt_list, image_src, inputs[0]["file_name"], scores, boxes, labels, dataset_classes)
+    
     # saving embedding of queries to file
     # will be used later as few shots
-    fs_create_embedding_iou = 0.6
+    fs_create_embedding_iou = 0.5
     if is_create_fs:    
         global embed_idx
         #novel category
@@ -278,27 +362,36 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         gt_bboxes = inputs[0]['instances'].gt_boxes
         gt_classes = inputs[0]['instances'].gt_classes
         for b in gt_bboxes:
-            gts.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])
-        if len(gts)>1:
-            print(len(gts))
+            gts.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])        
         iscrowd = [int(False)] * len(gt_bboxes)
         ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
         #loop over all bbox in gt
         for i in range(ious.shape[1]):
             max_iou = ious[:,i].max()     
             gt_class = gt_classes[i].item()      
-            if max_iou > fs_create_embedding_iou:# or gt_class==7:
+            
+            target_class = 2            
+            if gt_class == target_class:
+                with open("class2_files.txt", "a") as myfile:
+                    name = os.path.basename(inputs[0]["file_name"])
+                    to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
+                    myfile.write(to_write)
+                    myfile.write("\n")
+            
+            if max_iou > fs_create_embedding_iou and gt_class==target_class:
                 idx = ious[:,i].argmax()   
                 target_embed = embeds[idx]                
                 if gt_class not in embed_idx:
                     embed_idx[gt_class] = 0            
-                filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)
+                #filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)
+                name = os.path.basename(inputs[0]["file_name"])
+                filename = 'queries/{name}.pt'.format(name=name)
                 torch.save(target_embed, filename)
                 embed_idx[gt_class] += 1
         
     return final_outputs, total_compute_time
 
-def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, args):
+def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, dataset_classes, args):
     """
     Run model on the data_loader and evaluate the metrics with evaluator.
     The model will be used in eval mode.
@@ -347,7 +440,7 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs)
+                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, dataset_classes)
                 total_compute_time += compute_time
                 
             evaluator.process(inputs, outputs)

@@ -134,7 +134,7 @@ def setup(args):
 def main(args):
     #VOC_CLASSES_WRONG_CLASSES = ['aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor']  # fmt: skip
     VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
-    #VOC_CLASSES = ['diningtable']
+    #VOC_CLASSES = ['tvmonitor']
     COCO_CLASSES_ALL = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
     COCO_CLASSES_NOVEL = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'boat', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'bottle', 'chair', 'couch', 'potted plant', 'dining table', 'tv']
     COCO_CLASSES_BASE = ['truck','traffic light','fire hydrant','stop sign','parking meter','bench','elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','bed','toilet','laptop','mouse','remote','keyboard','cell phone','microwave','oven','toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush']
@@ -173,7 +173,7 @@ def main(args):
                 dataset_classes = COCO_CLASSES_ALL #COCO_CLASSES_NOVEL
             text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(dataset_classes, tokenizer, class_len_per_prompt)
             #text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(COCO_CLASSES_NOVEL, tokenizer, class_len_per_prompt)
-            res = Trainer.test(cfg, model, args, text_prompt_list, positive_map_list)
+            res = Trainer.test(cfg, model, args, text_prompt_list, positive_map_list, dataset_classes)
         else:
             res = Trainer.test(cfg, model, args)
             

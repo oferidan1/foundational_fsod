@@ -35,6 +35,7 @@ from .utils import (
     gen_sineembed_for_position,
     get_sine_pos_embed,
 )
+import numpy as np
 
 
 class Transformer(nn.Module):
@@ -298,7 +299,10 @@ class Transformer(nn.Module):
             )  # (bs, \sum{hw}, 4) unsigmoid
             topk = self.num_queries
 
-            topk_proposals = torch.topk(topk_logits, topk, dim=1)[1]  # bs, nq
+            topk_proposals = torch.topk(topk_logits, topk, dim=1)[1]  # bs, nq            
+            #fs_gdino :: random 900 indices check - verify scores are worst than best indices
+            # topk_proposals = np.random.randint(0, topk_logits.shape[1]-1, (1,topk))
+            # topk_proposals = torch.from_numpy(topk_proposals).to(topk_logits.device)
 
             # gather boxes
             refpoint_embed_undetach = torch.gather(
@@ -382,7 +386,8 @@ class Transformer(nn.Module):
         if supporting_latents != []:
             bs = tgt.shape[0]
             # sf_K : K is the number of supporting latents per class
-            sf_K = 3
+            #sf_K = 3
+            sf_K = len(supporting_latents)
             supporting_latents = supporting_latents.repeat(bs, 1, 1)
             #loop over supporting_latents, each time take only the per class K latenets
             for i in range(0, supporting_latents.shape[1], sf_K):                

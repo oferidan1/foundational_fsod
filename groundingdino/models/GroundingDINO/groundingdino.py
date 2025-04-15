@@ -50,6 +50,8 @@ import pickle
 from collections import defaultdict
 import pycocotools.mask as mask_utils
 import numpy as np
+import glob
+import os
 
 class GroundingDINO(nn.Module):
     """This is the Cross-Attention Detector module that performs object detection"""
@@ -209,25 +211,52 @@ class GroundingDINO(nn.Module):
         #self.supporting_latents = defaultdict(list)
         self.supporting_latents = []        
         if is_supporting_latents:
+            #self.load_supporting_latents_clusters()
+            self.load_supporting_latents_class7()          
+            
+            
+    def load_supporting_latents_class7(self):
+        files = glob.glob('queries/*.pt')
+        d = defaultdict(list)
+        #load all files to dict
+        queries = []
+        supporting_keys = []
+        for file in files:
+            q = torch.load(file)
+            name = os.path.splitext(os.path.basename(file))[0]
+            d[name] = q.unsqueeze(0)
+            # queries.append(q.unsqueeze(0))
+            supporting_keys.append(7)
+        self.supporting_latents = d
+        # queries = torch.cat(queries, dim=0)
+        # self.supporting_latents.append(queries)
+        # self.supporting_latents = torch.cat(self.supporting_latents, dim=0)
+        self.supporting_classes = np.array(supporting_keys)       
+              
+        
+            
+    def load_supporting_latents_clusters(self):
+        #common classes - exlude from supporting keys
+        #voc_classes_to_exlude = ['0', '1']
+        filename = 'cluster_centers.p'   
+        with open(filename, 'rb') as fp:
+            d = pickle.load(fp)
+        supporting_keys = []
+        for key, v_list in d.items():
             #common classes - exlude from supporting keys
-            #voc_classes_to_exlude = ['0', '1']
-            filename = 'cluster_centers.p'   
-            with open(filename, 'rb') as fp:
-                d = pickle.load(fp)
-            supporting_keys = []
-            for key, v_list in d.items():
-                #common classes - exlude from supporting keys
-                # if key in voc_classes_to_exlude:
-                #     continue
-                queries = []
-                for v in v_list:
-                    q = torch.load(v)
-                    queries.append(q.unsqueeze(0))
-                    supporting_keys.append(int(key))
-                queries = torch.cat(queries, dim=0)
-                self.supporting_latents.append(queries)
-            self.supporting_latents = torch.cat(self.supporting_latents, dim=0)
-            self.supporting_classes = np.array(supporting_keys)            
+            # if key in voc_classes_to_exlude:
+            #     continue
+            queries = []
+            for v in v_list:
+                q = torch.load(v)
+                queries.append(q.unsqueeze(0))
+                supporting_keys.append(int(key))
+            queries = torch.cat(queries, dim=0)
+            self.supporting_latents.append(queries)
+        self.supporting_latents = torch.cat(self.supporting_latents, dim=0)
+        self.supporting_classes = np.array(supporting_keys)       
+            
+
 
     def _reset_parameters(self):
         # init input_proj
@@ -258,6 +287,12 @@ class GroundingDINO(nn.Module):
         else:
             captions = [t["caption"] for t in targets]
         len(captions)
+        supporting_latents = []
+        #supporting_latents = self.supporting_latents        
+        if 'filename' in kw:
+            filename = kw["filename"]
+            if filename in self.supporting_latents:
+                supporting_latents = self.supporting_latents[filename]                           
 
         # encoder texts
         tokenized = self.tokenizer(captions, padding="longest", return_tensors="pt").to(
@@ -345,7 +380,7 @@ class GroundingDINO(nn.Module):
          # outpus is: hs_fs, reference_fs
         input_query_bbox = input_query_label = attn_mask = dn_meta = None
         hs, reference, hs_enc, ref_enc, init_box_proposal, queries, hs_fs, reference_fs = self.transformer(
-            srcs, masks, input_query_bbox, poss, input_query_label, attn_mask, text_dict, self.supporting_latents
+            srcs, masks, input_query_bbox, poss, input_query_label, attn_mask, text_dict, supporting_latents
         )
 
         # deformable-detr-like anchor update
@@ -382,8 +417,8 @@ class GroundingDINO(nn.Module):
             ):                
                 layer_hs = layer_hs.unsqueeze(0)
                 layer_ref_sig = layer_ref_sig.unsqueeze(0)
-                layer_delta_unsig = layer_bbox_embed(layer_hs[:,:self.supporting_latents.shape[0],:])
-                layer_outputs_unsig = layer_delta_unsig + inverse_sigmoid(layer_ref_sig[:,:self.supporting_latents.shape[0],:])
+                layer_delta_unsig = layer_bbox_embed(layer_hs[:,:supporting_latents.shape[0],:])
+                layer_outputs_unsig = layer_delta_unsig + inverse_sigmoid(layer_ref_sig[:,:supporting_latents.shape[0],:])
                 layer_outputs_unsig = layer_outputs_unsig.sigmoid()
                 outputs_coord_list_fs.append(layer_outputs_unsig)
             outputs_coord_list_fs = torch.stack(outputs_coord_list_fs)            
