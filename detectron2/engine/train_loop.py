@@ -312,32 +312,46 @@ class SimpleTrainer(TrainerBase):
         self.concurrent_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         
     def run_gdino(self, inputs):
+        K = 100
+        length = 81
         image, image_src = prepare_image_for_GDINO(inputs[0])
         outputs = self.model(image, captions = self.text_prompt_list)
         out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
         out_bbox = outputs["pred_boxes"] # prediction_boxes.shape = (batch, nq, 4)    
         out_embeds = outputs["pred_embeds"]
-        prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
-        prob_to_label_list = []    
-        for i in range(prob_to_token.shape[0]):
-            # (nq, 256) @ (num_categories, 256).T -> (nq, num_categories)
-            curr_prob_to_label = prob_to_token[i] @ self.positive_map_list[i].to(prob_to_token.device).T
-            prob_to_label_list.append(curr_prob_to_label.to("cpu"))    
-        prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, 1203)                  
-        topk_values, topk_idxs = torch.topk(
-            prob_to_label.view(-1), K, 0
-        )
-        #topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
-        scores = topk_values # Shape: (300,)
-        topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
-        labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
-        topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
-        combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)
-        boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
-        embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]]
-        h, w = inputs[0]['height'], inputs[0]['width']
-        boxes = boxes * torch.Tensor([w, h, w, h])
-        boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
+        # prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
+        # prob_to_label_list = []    
+        # for i in range(prob_to_token.shape[0]):
+        #     # (nq, 256) @ (num_categories, 256).T -> (nq, num_categories)
+        #     curr_prob_to_label = prob_to_token[i] @ self.positive_map_list[i].to(prob_to_token.device).T
+        #     prob_to_label_list.append(curr_prob_to_label.to("cpu"))    
+        # prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, 1203)                  
+        # topk_values, topk_idxs = torch.topk(
+        #     prob_to_label.view(-1), K, 0
+        # )
+        # #topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
+        # scores = topk_values # Shape: (300,)
+        # topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
+        # labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
+        # topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
+        # combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)
+        # boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
+        # embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]]
+        # h, w = inputs[0]['height'], inputs[0]['width']
+        # boxes = boxes * torch.Tensor([w, h, w, h])
+        # boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
+        
+        loss_dict = {}
+        
+        if "instances" in inputs[0]:
+            gt_instances = [x["instances"].to(out_logits.device) for x in inputs]
+            gt_boxes = [x.gt_boxes.tensor for x in gt_instances]
+            gt_labels = [x.gt_classes for x in gt_instances]
+            #targets = gt_instances
+            targets = {'boxes': gt_boxes, 'labels': gt_labels}            
+            loss_dict = self.gdino_loss(outputs, targets, self.positive_map_list, self.text_prompt_list)
+        
+        return loss_dict
 
     def run_step(self):
         """
@@ -361,8 +375,10 @@ class SimpleTrainer(TrainerBase):
         """
         If you want to do something with the losses, you can wrap the model.
         """       
-        #loss_dict = self.run_gdino(data)
-        loss_dict = self.model(data)
+        if self.is_gdino:
+            loss_dict = self.run_gdino(data)
+        else:
+            loss_dict = self.model(data)
         if isinstance(loss_dict, torch.Tensor):
             losses = loss_dict
             loss_dict = {"total_loss": loss_dict}

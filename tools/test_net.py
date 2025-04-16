@@ -33,7 +33,7 @@ from fsdet.evaluation import (
     verify_results,
 )
 
-from groundingdino.util.inference import load_model
+from groundingdino.util.inference import load_gdino_model
 from load_models import load_fully_supervised_trained_model, load_clip_model
 from utils import get_text_prompt_list_for_g_dino_with_classes, get_coco_to_lvis_mapping
 
@@ -147,7 +147,7 @@ def main(args):
         
         if is_gdino_model:
             gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
-            model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, is_supporting_latents)        
+            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, is_supporting_latents)        
         if args.eval_iter != -1:
             # load checkpoint at specified iteration
             ckpt_file = os.path.join(

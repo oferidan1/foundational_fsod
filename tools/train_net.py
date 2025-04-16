@@ -79,6 +79,8 @@ def setup(args):
     cfg.merge_from_file(args.config_file)
     if args.opts:
         cfg.merge_from_list(args.opts)
+    cfg.is_PT = args.is_PT
+    cfg.is_gdino = args.is_gdino
     cfg.freeze()
     set_global_cfg(cfg)
     default_setup(cfg, args)

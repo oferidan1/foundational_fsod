@@ -42,8 +42,10 @@ from fsdet.utils.file_io import PathManager
 from fvcore.nn.precise_bn import get_bn_modules
 from torch.nn.parallel import DistributedDataParallel
 
-from groundingdino.util.inference import load_model
+from groundingdino.util.inference import load_gdino_model
 from utils import get_text_prompt_list_for_g_dino_with_classes
+from groundingdino.models.GroundingDINO.groundingdino import SetCriterion
+from groundingdino.models.GroundingDINO.matcher import HungarianMatcher
 
 __all__ = [
     "default_argument_parser",
@@ -72,6 +74,7 @@ def default_argument_parser():
     )
     parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
     parser.add_argument("--is_sl", type=int, default=0, help="is supporting latents DB for gdino")
+    parser.add_argument("--is_PT", type=int, default=1, help="is PT for gdino")
     parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument(
@@ -80,7 +83,7 @@ def default_argument_parser():
         help="whether to attempt to resume from the checkpoint directory",
     )
     parser.add_argument(
-        "--eval-only", action="store_true", help="evaluate last checkpoint", default=True
+        "--eval-only", action="store_true", help="evaluate last checkpoint", default=False
     )
     parser.add_argument(
         "--eval-all",
@@ -310,24 +313,35 @@ class DefaultTrainer(SimpleTrainer):
         """
         # Assume these objects must be constructed in this order.
         model = self.build_model(cfg)
-        
-        ## gdino
-        is_gdino_model = True
-        if is_gdino_model:
+        self.is_gdino = cfg.is_gdino
+        ## gdino training
+        if self.is_gdino:
             gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
-            model = load_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, False)                
-            for p in model.parameters():
-                p.requries_grad = False
-        ##
-        optimizer = self.build_optimizer(cfg, model)
-        data_loader = self.build_train_loader(cfg)
+            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, False, cfg.is_PT)                
+            #set requires_grad only for fs_gdino weights
+            for p in model.parameters():                
+                p.requries_grad = False      
+            if cfg.is_PT:              
+                model.fs_gdino_rerank.requries_grad = True
         
-        device = 'cuda'
-        self.model = self.model.to(device)
-        tokenizer = self.model.tokenizer
-        class_len_per_prompt = 81
-        VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
-        self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)     
+            device = 'cuda'
+            model = model.to(device)
+            tokenizer = model.tokenizer
+            class_len_per_prompt = 81
+            VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
+            self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)         
+            
+            losses = ['labels', 'boxes']
+            matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2, focal_alpha=0.25)
+            weight_dict = {'loss_ce':2.0, 'loss_bbox':5.0, 'loss_giou':2.0, 'loss_ce_0':2.0, 'loss_bbox_0':5.0, 'loss_giou_0':2.0, 'loss_ce_1':2.0, 'loss_bbox_1':5.0, 
+                           'loss_giou_1':2.0, 'loss_ce_2':2.0, 'loss_bbox_2':5.0, 'loss_giou_2':2.0, 'loss_ce_3':2.0, 'loss_bbox_3':5.0, 'loss_giou_3':2.0, 'loss_ce_4':2.0, 
+                           'loss_bbox_4':5.0, 'loss_giou_4':2.0, 'loss_ce_interm':2.0, 'loss_bbox_interm':5.0, 'loss_giou_interm':2.0}
+            
+            self.gdino_loss = SetCriterion(matcher=matcher, weight_dict=weight_dict, focal_alpha=0.25, focal_gamma=2, losses=losses)
+            self.gdino_loss.to(device)
+            ##
+        optimizer = self.build_optimizer(cfg, model)
+        data_loader = self.build_train_loader(cfg)                
 
         # For training, wrap with DDP. But don't need this for inference.
         if comm.get_world_size() > 1:
@@ -542,7 +556,7 @@ class DefaultTrainer(SimpleTrainer):
         )
 
     @classmethod
-    def test(cls, cfg, model, args, text_prompt_list=None, positive_map_list=None, dataset_classes=None, evaluators=None):
+    def test(cls, cfg, model, args=None, text_prompt_list=None, positive_map_list=None, dataset_classes=None, evaluators=None):
         """
         Args:
             cfg (CfgNode):
@@ -566,12 +580,12 @@ class DefaultTrainer(SimpleTrainer):
         #fs_gdino
         #ofer : TRAIN / TEST datasets
         dataset_mode = cfg.DATASETS.TEST
-        if args.is_create_fs:
+        if args is not None and args.is_create_fs:
             dataset_mode = cfg.DATASETS.TRAIN            
             cfg['DATALOADER']['ASPECT_RATIO_GROUPING'] = False
             
         for idx, dataset_name in enumerate(dataset_mode):
-            if args.is_create_fs:
+            if args is not None and args.is_create_fs:
                 data_loader = cls.build_train_loader(cfg)
             else:
                 data_loader = cls.build_test_loader(cfg, dataset_name)            

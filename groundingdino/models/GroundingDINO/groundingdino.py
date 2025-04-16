@@ -79,7 +79,8 @@ class GroundingDINO(nn.Module):
         text_encoder_type="bert-base-uncased",
         sub_sentence_present=True,
         max_text_len=256,
-        is_supporting_latents=True,
+        is_supporting_latents=False,
+        is_PT=False,
     ):
         """Initializes the model.
         Parameters:
@@ -213,7 +214,16 @@ class GroundingDINO(nn.Module):
         if is_supporting_latents:
             #self.load_supporting_latents_clusters()
             self.load_supporting_latents_class7()          
-            
+        
+        #is Prompt Tuning (PT) enabled
+        self.is_PT = is_PT
+        if is_PT:
+            PT_len = 51
+            ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
+            nn.init.normal_(ctx_vectors, std=0.02)
+            self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
+            #self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
+
             
     def load_supporting_latents_class7(self):
         files = glob.glob('queries/*.pt')
@@ -338,7 +348,12 @@ class GroundingDINO(nn.Module):
             text_self_attention_masks = text_self_attention_masks[
                 :, : self.max_text_len, : self.max_text_len
             ]
-
+            
+        # fs_gdino
+        # add learnt PT rerank to encoded text
+        if self.is_PT:
+            encoded_text += self.fs_gdino_rerank
+        
         text_dict = {
             "encoded_text": encoded_text, #.bfloat16(),  # bs, 195, d_model
             "text_token_mask": text_token_mask,  # bs, 195
@@ -394,6 +409,10 @@ class GroundingDINO(nn.Module):
             outputs_coord_list.append(layer_outputs_unsig)
         outputs_coord_list = torch.stack(outputs_coord_list)
 
+        # fs_gdino
+        # add learnt PT classify to hs (text_dict)
+        # if self.is_PT:
+        #     text_dict += self.fs_gdino_classify
         # output
         outputs_class = torch.stack(
             [
@@ -467,6 +486,16 @@ class GroundingDINO(nn.Module):
         #     interm_class = self.transformer.enc_out_class_embed(hs_enc[-1], text_dict)
         #     out['interm_outputs'] = {'pred_logits': interm_class, 'pred_boxes': interm_coord}
         #     out['interm_outputs_for_matching_pre'] = {'pred_logits': interm_class, 'pred_boxes': init_box_proposal}
+        
+         # Used to calculate losses
+        bs, len_td = text_dict['text_token_mask'].shape
+        out['text_mask']=torch.zeros(bs, self.max_text_len, dtype=torch.bool).to(
+            samples.device
+        )
+        for b in range(bs):
+            for j in range(len_td):
+                if text_dict['text_token_mask'][b][j] == True:
+                    out['text_mask'][b][j] = True
 
         return out
 
@@ -512,7 +541,297 @@ def build_groundingdino(args):
         text_encoder_type=args.text_encoder_type,
         sub_sentence_present=sub_sentence_present,
         max_text_len=args.max_text_len,
-        is_supporting_latents=args.is_supporting_latents
+        is_supporting_latents=args.is_supporting_latents,
+        is_PT=args.is_PT
     )
 
     return model
+
+
+class SetCriterion(nn.Module):
+    def __init__(self, matcher, weight_dict, focal_alpha,focal_gamma, losses):
+        """ Create the criterion.
+        Parameters:
+            matcher: module able to compute a matching between targets and proposals
+            weight_dict: dict containing as key the names of the losses and as values their relative weight.
+            losses: list of all the losses to be applied. See get_loss for list of available losses.
+            focal_alpha: alpha in Focal Loss
+        """
+        super().__init__()
+        self.matcher = matcher
+        self.weight_dict = weight_dict
+        self.losses = losses
+        self.focal_alpha = focal_alpha
+        self.focal_gamma= focal_gamma
+
+    @torch.no_grad()
+    def loss_cardinality(self, outputs, targets, indices, num_boxes):
+        """ Compute the cardinality error, ie the absolute error in the number of predicted non-empty boxes
+        This is not really a loss, it is intended for logging purposes only. It doesn't propagate gradients
+        """
+
+        pred_logits = outputs['pred_logits']
+        device = pred_logits.device
+        tgt_lengths = torch.as_tensor([len(v["labels"]) for v in targets], device=device)
+        # Count the number of predictions that are NOT "no-object" (which is the last class)
+        card_pred = (pred_logits.argmax(-1) != pred_logits.shape[-1] - 1).sum(1)
+        card_err = F.l1_loss(card_pred.float(), tgt_lengths.float())
+        losses = {'cardinality_error': card_err}
+        return losses
+
+    def loss_boxes(self, outputs, targets, indices, num_boxes):
+        """Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
+           targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
+           The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
+        """
+        assert 'pred_boxes' in outputs
+        idx = self._get_src_permutation_idx(indices)
+        src_boxes = outputs['pred_boxes'][idx]
+        target_boxes = torch.cat([t[i] for t, (_, i) in zip(targets['boxes'], indices)], dim=0)
+
+        loss_bbox = F.l1_loss(src_boxes, target_boxes, reduction='none')
+
+        losses = {}
+        losses['loss_bbox'] = loss_bbox.sum() / num_boxes
+
+        loss_giou = 1 - torch.diag(box_ops.generalized_box_iou(
+            box_ops.box_cxcywh_to_xyxy(src_boxes),
+            box_ops.box_cxcywh_to_xyxy(target_boxes)))
+        losses['loss_giou'] = loss_giou.sum() / num_boxes
+
+        # calculate the x,y and h,w loss
+        with torch.no_grad():
+            losses['loss_xy'] = loss_bbox[..., :2].sum() / num_boxes
+            losses['loss_hw'] = loss_bbox[..., 2:].sum() / num_boxes
+
+
+        return losses
+
+
+    def token_sigmoid_binary_focal_loss(self, outputs, targets, indices, num_boxes):
+        pred_logits=outputs['pred_logits']
+        new_targets=outputs['one_hot'].to(pred_logits.device)
+        text_mask=outputs['text_mask']
+
+        assert (new_targets.dim() == 3)
+        assert (pred_logits.dim() == 3)  # batch x from x to
+        
+        bs, n, _ = pred_logits.shape
+        alpha=self.focal_alpha
+        gamma=self.focal_gamma
+        if text_mask is not None:
+            # ODVG: each sample has different mask 
+            text_mask = text_mask.repeat(1, pred_logits.size(1)).view(outputs['text_mask'].shape[0],-1,outputs['text_mask'].shape[1])
+            pred_logits = torch.masked_select(pred_logits, text_mask)
+            new_targets = torch.masked_select(new_targets, text_mask)
+
+        new_targets=new_targets.float()
+        p = torch.sigmoid(pred_logits)
+        ce_loss = F.binary_cross_entropy_with_logits(pred_logits, new_targets, reduction="none")
+        p_t = p * new_targets + (1 - p) * (1 - new_targets)
+        loss = ce_loss * ((1 - p_t) ** gamma)
+
+        if alpha >= 0:
+            alpha_t = alpha * new_targets + (1 - alpha) * (1 - new_targets)
+            loss = alpha_t * loss
+
+        total_num_pos=0
+        for batch_indices in indices:
+            total_num_pos += len(batch_indices[0])
+        num_pos_avg_per_gpu = max(total_num_pos , 1.0)
+        loss=loss.sum()/num_pos_avg_per_gpu
+        
+        losses = {'loss_ce': loss}
+        return losses
+
+
+    def _get_src_permutation_idx(self, indices):
+        # permute predictions following indices
+        batch_idx = torch.cat([torch.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        src_idx = torch.cat([src for (src, _) in indices])
+        return batch_idx, src_idx
+
+    def _get_tgt_permutation_idx(self, indices):
+        # permute targets following indices
+        batch_idx = torch.cat([torch.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
+        tgt_idx = torch.cat([tgt for (_, tgt) in indices])
+        return batch_idx, tgt_idx
+
+    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
+        loss_map = {
+            'labels': self.token_sigmoid_binary_focal_loss,
+            'cardinality': self.loss_cardinality,
+            'boxes': self.loss_boxes,
+        }
+        assert loss in loss_map, f'do you really want to compute {loss} loss?'
+        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+
+    def forward(self, outputs, targets, positive_map_list, caption, return_indices=False):
+        """ This performs the loss computation.
+        Parameters:
+             outputs: dict of tensors, see the output specification of the model for the format
+             targets: list of dicts, such that len(targets) == batch_size.
+                      The expected keys in each dict depends on the losses applied, see each loss' doc
+            
+             return_indices: used for vis. if True, the layer0-5 indices will be returned as well.
+        """
+        device=next(iter(outputs.values())).device
+        one_hot = torch.zeros(outputs['pred_logits'].size(),dtype=torch.int64) # torch.Size([bs, 900, 256])
+        indices = []
+        #token = outputs['token']         
+        label_map_list = []        
+        for j in range(len(positive_map_list)): # bs
+             label_map=torch.where(positive_map_list[j]>0, 1., 0.)
+             label_map_list.append(label_map)             
+        # for j in range(len(cat_list)): # bs
+        #      label_map=[]
+        #     for i in range(len(cat_list[j])):
+        #         label_id=torch.tensor([i])
+        #         per_label=create_positive_map(token[j], label_id, cat_list[j], caption[j])
+        #         label_map.append(per_label)
+        #     label_map=torch.stack(label_map,dim=0).squeeze(1)
+        #     label_map_list.append(label_map)
+        # for j in range(len(cat_list)): # bs
+        for j in range(len(label_map_list)): # bs
+            for_match = {
+                "pred_logits" : outputs['pred_logits'][j].unsqueeze(0),
+                "pred_boxes" : outputs['pred_boxes'][j].unsqueeze(0)
+            }
+            inds = self.matcher(for_match, targets, label_map_list[j])
+            indices.extend(inds)
+        # indices : A list of size batch_size, containing tuples of (index_i, index_j) where:
+        # - index_i is the indices of the selected predictions (in order)
+        # - index_j is the indices of the corresponding selected targets (in order)
+
+        # import pdb; pdb.set_trace()
+        #tgt_ids = [v["labels"].cpu() for v in targets]
+        tgt_ids = [v.cpu() for v in targets["labels"]]
+        # len(tgt_ids) == bs
+        for i in range(len(indices)):
+            tgt_ids[i]=tgt_ids[i][indices[i][1]]
+            one_hot[i,indices[i][0]] = label_map_list[i][tgt_ids[i]].to(torch.long)
+        outputs['one_hot'] = one_hot
+        if return_indices:
+            indices0_copy = indices
+            indices_list = []
+
+        # Compute the average number of target boxes accross all nodes, for normalization purposes
+        #num_boxes_list = [len(t["labels"]) for t in targets]
+        num_boxes_list = [len(targets["labels"])]
+        num_boxes = sum(num_boxes_list)
+        num_boxes = torch.as_tensor([num_boxes], dtype=torch.float, device=device)
+        if is_dist_avail_and_initialized():
+            torch.distributed.all_reduce(num_boxes)
+        num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+        # Compute all the requested losses
+        losses = {}
+        for loss in self.losses:
+            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+
+        # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
+        if 'aux_outputs' in outputs:
+            for idx, aux_outputs in enumerate(outputs['aux_outputs']):
+                indices = []
+                for j in range(len(cat_list)): # bs
+                    aux_output_single = {
+                        'pred_logits' : aux_outputs['pred_logits'][j].unsqueeze(0),
+                        'pred_boxes': aux_outputs['pred_boxes'][j].unsqueeze(0)
+                    }
+                    inds = self.matcher(aux_output_single, [targets[j]], label_map_list[j])
+                    indices.extend(inds)
+                one_hot_aux = torch.zeros(outputs['pred_logits'].size(),dtype=torch.int64)
+                tgt_ids = [v["labels"].cpu() for v in targets]
+                for i in range(len(indices)):
+                    tgt_ids[i]=tgt_ids[i][indices[i][1]]
+                    one_hot_aux[i,indices[i][0]] = label_map_list[i][tgt_ids[i]].to(torch.long)
+                aux_outputs['one_hot'] = one_hot_aux
+                aux_outputs['text_mask'] = outputs['text_mask']
+                if return_indices:
+                    indices_list.append(indices)
+                for loss in self.losses:
+                    kwargs = {}
+                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes, **kwargs)                
+                    l_dict = {k + f'_{idx}': v for k, v in l_dict.items()}
+                    losses.update(l_dict)
+
+        # interm_outputs loss
+        if 'interm_outputs' in outputs:
+            interm_outputs = outputs['interm_outputs']
+            indices = []
+            for j in range(len(cat_list)): # bs
+                interm_output_single = {
+                    'pred_logits' : interm_outputs['pred_logits'][j].unsqueeze(0),
+                    'pred_boxes': interm_outputs['pred_boxes'][j].unsqueeze(0)
+                }
+                inds = self.matcher(interm_output_single, [targets[j]], label_map_list[j])
+                indices.extend(inds)
+            one_hot_aux = torch.zeros(outputs['pred_logits'].size(),dtype=torch.int64)
+            tgt_ids = [v["labels"].cpu() for v in targets]
+            for i in range(len(indices)):
+                tgt_ids[i]=tgt_ids[i][indices[i][1]]
+                one_hot_aux[i,indices[i][0]] = label_map_list[i][tgt_ids[i]].to(torch.long)
+            interm_outputs['one_hot'] = one_hot_aux
+            interm_outputs['text_mask'] = outputs['text_mask']
+            if return_indices:
+                indices_list.append(indices)
+            for loss in self.losses:
+                kwargs = {}
+                l_dict = self.get_loss(loss, interm_outputs, targets, indices, num_boxes, **kwargs)
+                l_dict = {k + f'_interm': v for k, v in l_dict.items()}
+                losses.update(l_dict)
+
+        if return_indices:
+            indices_list.append(indices0_copy)
+            return losses, indices_list
+
+        return losses
+
+def create_positive_map(tokenized, tokens_positive,cat_list,caption):
+    """construct a map such that positive_map[i,j] = True iff box i is associated to token j"""
+    positive_map = torch.zeros((len(tokens_positive), 256), dtype=torch.float)
+
+    for j,label in enumerate(tokens_positive):
+
+        start_ind = caption.find(cat_list[label])
+        end_ind = start_ind + len(cat_list[label]) - 1
+        beg_pos = tokenized.char_to_token(start_ind)
+        try:
+            end_pos = tokenized.char_to_token(end_ind)
+        except:
+            end_pos = None
+        if end_pos is None:
+            try:
+                end_pos = tokenized.char_to_token(end_ind - 1)
+                if end_pos is None:
+                    end_pos = tokenized.char_to_token(end_ind - 2)
+            except:
+                end_pos = None
+        # except Exception as e:
+        #     print("beg:", beg, "end:", end)
+        #     print("token_positive:", tokens_positive)
+        #     # print("beg_pos:", beg_pos, "end_pos:", end_pos)
+        #     raise e
+        # if beg_pos is None:
+        #     try:
+        #         beg_pos = tokenized.char_to_token(beg + 1)
+        #         if beg_pos is None:
+        #             beg_pos = tokenized.char_to_token(beg + 2)
+        #     except:
+        #         beg_pos = None
+        # if end_pos is None:
+        #     try:
+        #         end_pos = tokenized.char_to_token(end - 2)
+        #         if end_pos is None:
+        #             end_pos = tokenized.char_to_token(end - 3)
+        #     except:
+        #         end_pos = None
+        if beg_pos is None or end_pos is None:
+            continue
+        if beg_pos < 0 or end_pos < 0:
+            continue
+        if beg_pos > end_pos:
+            continue
+        # assert beg_pos is not None and end_pos is not None
+        positive_map[j,beg_pos: end_pos + 1].fill_(1)
+    return positive_map 

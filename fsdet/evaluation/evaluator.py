@@ -275,8 +275,8 @@ def do_gdino_visualization(model, caption, image_pil, filename, scores, boxes, l
 # run gdino model with params
 embed_idx = {}
 def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, dataset_classes, iou_thr=0.7):
-    #K = 100
-    K = 900
+    K = 100
+    #K = 900
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
     start_compute_time = time.time()
