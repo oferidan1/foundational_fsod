@@ -168,7 +168,9 @@ class TrainerBase:
                 logger.exception("Exception during training:")
                 raise
             finally:
-                self.after_train()
+                # save trained model
+                torch.save(self.model, 'outputs/gdino_pt.pth')
+                self.after_train()                
 
     def before_train(self):
         for h in self._hooks:
@@ -229,20 +231,28 @@ class TrainerBase:
                 logger.warning(f"Cannot find the hook '{key}', its state_dict is ignored.")
 
 
-def prepare_image_for_GDINO(input, device = "cuda"):
+def prepare_image_for_GDINO(input, is_resize=False, device = "cuda"):
     """
     inputs: dict, with keys "file_name", "height", "width", "image", "image_id"
     outputs: transformed images
     """
-    transform = T2.Compose(
+    if is_resize:
+        transform = T2.Compose(
+        [
+            T2.ToTensor(),
+            T2.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]
+        )
+        image_src = Image.open(input["file_name"]).convert("RGB").resize((1280, 800))
+    else:
+        transform = T2.Compose(
         [
             T2.RandomResize([800], max_size=1333),
             T2.ToTensor(),
             T2.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
         ]
-    )
-    
-    image_src = Image.open(input["file_name"]).convert("RGB")
+        )
+        image_src = Image.open(input["file_name"]).convert("RGB")
     image = np.asarray(image_src)
     image_transformed, _ = transform(image_src, None)
     image_transformed = image_transformed.to(device)
@@ -314,8 +324,13 @@ class SimpleTrainer(TrainerBase):
     def run_gdino(self, inputs):
         K = 100
         length = 81
-        image, image_src = prepare_image_for_GDINO(inputs[0])
-        outputs = self.model(image, captions = self.text_prompt_list)
+        images = []
+        batch_size = len(inputs)
+        for in1 in inputs:            
+            image, image_src = prepare_image_for_GDINO(in1, False)
+            images.append(image)
+        images = torch.cat(images, dim=0)
+        outputs = self.model(images, captions = batch_size * self.text_prompt_list)
         out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
         out_bbox = outputs["pred_boxes"] # prediction_boxes.shape = (batch, nq, 4)    
         out_embeds = outputs["pred_embeds"]

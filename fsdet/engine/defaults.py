@@ -65,9 +65,9 @@ def default_argument_parser():
     parser = argparse.ArgumentParser(description="FsDet Training")
     parser.add_argument(
         "--config-file",
-        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
-        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_3shot.yaml",        
-        #default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_novel_30shot.yaml",
+        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
+        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_10shot.yaml",        
+        default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_novel_30shot.yaml",
         #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_base1.yaml",
         metavar="FILE",
         help="path to config file",
@@ -75,7 +75,7 @@ def default_argument_parser():
     parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
     parser.add_argument("--is_sl", type=int, default=0, help="is supporting latents DB for gdino")
     parser.add_argument("--is_PT", type=int, default=1, help="is PT for gdino")
-    parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
+    parser.add_argument("--data_source", type=str, default='coco', help="voc/coco/lvis")
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument(
         "--resume",
@@ -311,8 +311,7 @@ class DefaultTrainer(SimpleTrainer):
         Args:
             cfg (CfgNode):
         """
-        # Assume these objects must be constructed in this order.
-        model = self.build_model(cfg)
+        # Assume these objects must be constructed in this order.        
         self.is_gdino = cfg.is_gdino
         ## gdino training
         if self.is_gdino:
@@ -320,16 +319,21 @@ class DefaultTrainer(SimpleTrainer):
             model = load_gdino_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, False, cfg.is_PT)                
             #set requires_grad only for fs_gdino weights
             for p in model.parameters():                
-                p.requries_grad = False      
+                p.requires_grad = False      
             if cfg.is_PT:              
-                model.fs_gdino_rerank.requries_grad = True
+                model.fs_gdino_rerank.requires_grad = True
         
             device = 'cuda'
             model = model.to(device)
             tokenizer = model.tokenizer
             class_len_per_prompt = 81
             VOC_CLASSES = ['aeroplane', 'bicycle', 'boat', 'bottle', 'car', 'cat', 'chair', 'diningtable', 'dog', 'horse', 'person', 'pottedplant', 'sheep', 'train', 'tvmonitor', 'bird', 'bus', 'cow', 'motorbike', 'sofa']
-            self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(VOC_CLASSES, tokenizer, class_len_per_prompt)         
+            COCO_CLASSES_ALL = ['person', 'bicycle', 'car', 'motorcycle', 'airplane', 'bus', 'train', 'truck', 'boat', 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench', 'bird', 'cat', 'dog', 'horse', 'sheep', 'cow', 'elephant', 'bear', 'zebra', 'giraffe', 'backpack', 'umbrella', 'handbag', 'tie', 'suitcase', 'frisbee', 'skis', 'snowboard', 'sports ball', 'kite', 'baseball bat', 'baseball glove', 'skateboard', 'surfboard', 'tennis racket', 'bottle', 'wine glass', 'cup', 'fork', 'knife', 'spoon', 'bowl', 'banana', 'apple', 'sandwich', 'orange', 'broccoli', 'carrot', 'hot dog', 'pizza', 'donut', 'cake', 'chair', 'couch', 'potted plant', 'bed', 'dining table', 'toilet', 'tv', 'laptop', 'mouse', 'remote', 'keyboard', 'cell phone', 'microwave', 'oven', 'toaster', 'sink', 'refrigerator', 'book', 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier', 'toothbrush']
+            if cfg.data_source=='voc':
+                dataset_classes = VOC_CLASSES
+            elif cfg.data_source=='coco':
+                dataset_classes = COCO_CLASSES_ALL 
+            self.text_prompt_list, self.positive_map_list = get_text_prompt_list_for_g_dino_with_classes(dataset_classes, tokenizer, class_len_per_prompt)         
             
             losses = ['labels', 'boxes']
             matcher = HungarianMatcher(cost_class=1, cost_bbox=5, cost_giou=2, focal_alpha=0.25)
@@ -340,6 +344,8 @@ class DefaultTrainer(SimpleTrainer):
             self.gdino_loss = SetCriterion(matcher=matcher, weight_dict=weight_dict, focal_alpha=0.25, focal_gamma=2, losses=losses)
             self.gdino_loss.to(device)
             ##
+        else:
+            model = self.build_model(cfg)
         optimizer = self.build_optimizer(cfg, model)
         data_loader = self.build_train_loader(cfg)                
 

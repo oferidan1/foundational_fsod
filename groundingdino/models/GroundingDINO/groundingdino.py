@@ -222,6 +222,7 @@ class GroundingDINO(nn.Module):
             ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
             nn.init.normal_(ctx_vectors, std=0.02)
             self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
+            #self.register_parameter('fs_gdino_rerank', self.fs_gdino_rerank)
             #self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
 
             
@@ -675,6 +676,7 @@ class SetCriterion(nn.Module):
             
              return_indices: used for vis. if True, the layer0-5 indices will be returned as well.
         """
+        batch_size = len(outputs['pred_logits'])
         device=next(iter(outputs.values())).device
         one_hot = torch.zeros(outputs['pred_logits'].size(),dtype=torch.int64) # torch.Size([bs, 900, 256])
         indices = []
@@ -692,12 +694,13 @@ class SetCriterion(nn.Module):
         #     label_map=torch.stack(label_map,dim=0).squeeze(1)
         #     label_map_list.append(label_map)
         # for j in range(len(cat_list)): # bs
-        for j in range(len(label_map_list)): # bs
+        for j in range(batch_size): # bs
             for_match = {
                 "pred_logits" : outputs['pred_logits'][j].unsqueeze(0),
                 "pred_boxes" : outputs['pred_boxes'][j].unsqueeze(0)
             }
-            inds = self.matcher(for_match, targets, label_map_list[j])
+            target_j = {'boxes': targets['boxes'][j], 'labels': targets['labels'][j]}
+            inds = self.matcher(for_match, target_j, label_map_list[0])
             indices.extend(inds)
         # indices : A list of size batch_size, containing tuples of (index_i, index_j) where:
         # - index_i is the indices of the selected predictions (in order)
@@ -709,7 +712,7 @@ class SetCriterion(nn.Module):
         # len(tgt_ids) == bs
         for i in range(len(indices)):
             tgt_ids[i]=tgt_ids[i][indices[i][1]]
-            one_hot[i,indices[i][0]] = label_map_list[i][tgt_ids[i]].to(torch.long)
+            one_hot[i,indices[i][0]] = label_map_list[0][tgt_ids[i]].to(torch.long)
         outputs['one_hot'] = one_hot
         if return_indices:
             indices0_copy = indices

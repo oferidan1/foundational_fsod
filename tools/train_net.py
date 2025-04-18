@@ -15,7 +15,7 @@ You may want to write your own script with your datasets and other customization
 """
 
 import os
-
+os.environ["TOKENIZERS_PARALLELISM"] = "False"
 import detectron2.utils.comm as comm
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.data import MetadataCatalog
@@ -81,6 +81,7 @@ def setup(args):
         cfg.merge_from_list(args.opts)
     cfg.is_PT = args.is_PT
     cfg.is_gdino = args.is_gdino
+    cfg.data_source = args.data_source
     cfg.freeze()
     set_global_cfg(cfg)
     default_setup(cfg, args)

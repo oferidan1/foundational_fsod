@@ -72,8 +72,8 @@ class HungarianMatcher(nn.Module):
         # Also concat the target labels and boxes
         # tgt_ids = torch.cat([v["labels"] for v in targets)
         # tgt_bbox = torch.cat([v["boxes"] for v in targets])
-        tgt_ids = torch.cat(targets["labels"])
-        tgt_bbox = torch.cat(targets["boxes"])
+        tgt_ids = targets["labels"]
+        tgt_bbox = targets["boxes"]
 
 
         # Compute the classification cost.
@@ -109,7 +109,7 @@ class HungarianMatcher(nn.Module):
         C[torch.isnan(C)] = 0.0
         C[torch.isinf(C)] = 0.0
 
-        sizes = [len(v) for v in targets["boxes"]]        
+        sizes = [1 for v in range(targets["boxes"].shape[0])]        
         try:
             indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
         except:
