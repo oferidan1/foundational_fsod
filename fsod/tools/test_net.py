@@ -143,11 +143,9 @@ def main(args):
     if args.eval_only:
         model = Trainer.build_model(cfg)
         is_gdino_model = args.is_gdino
-        is_supporting_latents = args.is_sl
         
         if is_gdino_model:
-            gdino_checkpoint = '/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth'
-            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", gdino_checkpoint, is_supporting_latents)        
+            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", args.checkpoint, args.is_sl, args.is_PT)        
         if args.eval_iter != -1:
             # load checkpoint at specified iteration
             ckpt_file = os.path.join(
