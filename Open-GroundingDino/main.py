@@ -154,12 +154,12 @@ def main(args):
     if args.is_PT:              
         for p in model.parameters():                
             p.requires_grad = False      
-        for p in model.fs_gdino_rerank.parameters():
-            p.requires_grad = True
-        for p in model.fs_gdino_classify.parameters():
-            p.requires_grad = True
-        # model.fs_gdino_rerank.requires_grad = True
-        # model.fs_gdino_classify.requires_grad = True
+        # for p in model.fs_gdino_rerank.parameters():
+        #     p.requires_grad = True
+        # for p in model.fs_gdino_classify.parameters():
+        #     p.requires_grad = True
+        model.fs_gdino_rerank.requires_grad = True
+        model.fs_gdino_classify.requires_grad = True
     
     model.to(device)
     logger.debug("build model, done.")
