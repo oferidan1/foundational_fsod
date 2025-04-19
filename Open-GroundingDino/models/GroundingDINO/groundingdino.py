@@ -208,10 +208,11 @@ class GroundingDINO(nn.Module):
         if is_PT:
             PT_len = 195
             ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
+            ctx_vectors2 = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
             nn.init.normal_(ctx_vectors, std=0.02)
+            nn.init.normal_(ctx_vectors2, std=0.02)
             self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
-            #self.register_parameter('fs_gdino_rerank', self.fs_gdino_rerank)
-            #self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
+            self.fs_gdino_classify = nn.Parameter(ctx_vectors2)  # to be optimized      
 
         self._reset_parameters()
 
@@ -346,8 +347,8 @@ class GroundingDINO(nn.Module):
         
          # fs_gdino
         # add learnt PT classify to hs (text_dict)
-        # if self.is_PT:
-        #     text_dict += self.fs_gdino_classify
+        if self.is_PT:
+            text_dict['encoded_text'] += self.fs_gdino_classify
         outputs_class = torch.stack(
             [
                 layer_cls_embed(layer_hs, text_dict)

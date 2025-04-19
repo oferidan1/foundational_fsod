@@ -72,6 +72,9 @@ def get_args_parser():
     parser.add_argument("--local-rank", type=int, help='local rank for DistributedDataParallel')
     parser.add_argument('--amp', action='store_true', help="Train with mixed precision")
     parser.add_argument('--is_PT', type=int, default=1, help="is PT")
+    parser.add_argument('--gpu_id', default="1", help="gpu id")
+    parser.add_argument('--is_eval', type=int, default=0, help="is_eval")
+    
     return parser
 
 
@@ -152,6 +155,7 @@ def main(args):
         for p in model.parameters():                
             p.requires_grad = False      
         model.fs_gdino_rerank.requires_grad = True
+        model.fs_gdino_classify.requires_grad = True
     
     model.to(device)
     logger.debug("build model, done.")
@@ -286,6 +290,9 @@ def main(args):
     print("Start training")
     start_time = time.time()
     best_map_holder = BestMetricHolder(use_ema=False)
+    
+    test_stats = {}
+    coco_evaluator = None
 
     for epoch in range(args.start_epoch, args.epochs):
         epoch_start_time = time.time()
@@ -317,21 +324,23 @@ def main(args):
                 utils.save_on_master(weights, checkpoint_path)
                 
         # eval
-        test_stats, coco_evaluator = evaluate(
-            model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir,
-            wo_class_error=wo_class_error, args=args, logger=(logger if args.save_log else None)
-        )
-        map_regular = test_stats['coco_eval_bbox'][0]
-        _isbest = best_map_holder.update(map_regular, epoch, is_ema=False)
-        if _isbest:
-            checkpoint_path = output_dir / 'checkpoint_best_regular.pth'
-            utils.save_on_master({
-                'model': model_without_ddp.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'lr_scheduler': lr_scheduler.state_dict(),
-                'epoch': epoch,
-                'args': args,
-            }, checkpoint_path)
+        if args.is_eval:
+            test_stats, coco_evaluator = evaluate(
+                model, criterion, postprocessors, data_loader_val, base_ds, device, args.output_dir,
+                wo_class_error=wo_class_error, args=args, logger=(logger if args.save_log else None)
+            )
+            map_regular = test_stats['coco_eval_bbox'][0]
+            _isbest = best_map_holder.update(map_regular, epoch, is_ema=False)
+            if _isbest:
+                checkpoint_path = output_dir / 'checkpoint_best_regular.pth'
+                utils.save_on_master({
+                    'model': model_without_ddp.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': lr_scheduler.state_dict(),
+                    'epoch': epoch,
+                    'args': args,
+                }, checkpoint_path)
+                
         log_stats = {
             **{f'train_{k}': v for k, v in train_stats.items()},
             **{f'test_{k}': v for k, v in test_stats.items()},
@@ -377,6 +386,7 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_id
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     main(args)

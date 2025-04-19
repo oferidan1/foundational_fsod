@@ -119,9 +119,9 @@ def coco2odvg_from_fs(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser("coco to odvg format.", add_help=True)
-    parser.add_argument("--input", '-i', type=str, default='', help="input list name")
+    parser.add_argument("--input", '-i', type=str, default='/mnt/f/cocosplit/full_box_30shot_apple_trainval.json', help="input list name")
     parser.add_argument("--output", '-o', type=str, default='coco_fs.jsonl', help="output list name")
     args = parser.parse_args()
 
-    #coco2odvg(args)
-    coco2odvg_from_fs(args)
+    coco2odvg(args)
+    #coco2odvg_from_fs(args)

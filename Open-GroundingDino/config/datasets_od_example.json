@@ -7,10 +7,18 @@
       "dataset_mode": "odvg"
     }
   ],
+  "train1": [
+    {
+      "root": "/mnt/f/coco/trainval2014/",
+      "anno": "/mnt/f/coco/annotations/coco_fs_30shots_odvg.jsonl",      
+      "label_map": "/mnt/f/coco/annotations/coco2017_label_map.json",
+      "dataset_mode": "odvg"
+    }
+  ],
   "train": [
     {
       "root": "/mnt/f/coco/trainval2014/",
-      "anno": "/mnt/f/coco/annotations/coco_fs_30shots_odvg.jsonl",
+      "anno": "/mnt/f/coco/annotations/coco_fs_30shots_apple_odvg.jsonl",
       "label_map": "/mnt/f/coco/annotations/coco2017_label_map.json",
       "dataset_mode": "odvg"
     }

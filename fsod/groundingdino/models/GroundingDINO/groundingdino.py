@@ -218,12 +218,11 @@ class GroundingDINO(nn.Module):
         #is Prompt Tuning (PT) enabled
         self.is_PT = is_PT
         if is_PT:
-            PT_len = 51
+            PT_len = 195
             ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
             nn.init.normal_(ctx_vectors, std=0.02)
             self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
-            #self.register_parameter('fs_gdino_rerank', self.fs_gdino_rerank)
-            #self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
+            self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
 
             
     def load_supporting_latents_class7(self):
@@ -412,8 +411,8 @@ class GroundingDINO(nn.Module):
 
         # fs_gdino
         # add learnt PT classify to hs (text_dict)
-        # if self.is_PT:
-        #     text_dict += self.fs_gdino_classify
+        if self.is_PT:
+            text_dict['encoded_text'] += self.fs_gdino_classify
         # output
         outputs_class = torch.stack(
             [

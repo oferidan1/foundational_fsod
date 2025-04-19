@@ -19,5 +19,8 @@ rename 's/class0_/class7_/g' *.pt
 
 Open-GroundingDINO project - training code
 --------------------------------------------
+create train dataset:
+python tools/coco2odvg.py
+
 edit dataset path in : config/datasets_od_example.json
 python main.py ---is_PT=1
