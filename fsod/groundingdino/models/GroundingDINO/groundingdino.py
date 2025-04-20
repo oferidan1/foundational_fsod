@@ -354,8 +354,8 @@ class GroundingDINO(nn.Module):
         # fs_gdino
         # add learnt PT rerank to encoded text
         if self.is_PT:
-            # encoded_text += self.fs_gdino_rerank
-            encoded_text = self.fs_gdino_rerank(encoded_text)
+            encoded_text += self.fs_gdino_rerank
+            #encoded_text = self.fs_gdino_rerank(encoded_text)
         
         text_dict = {
             "encoded_text": encoded_text, #.bfloat16(),  # bs, 195, d_model
