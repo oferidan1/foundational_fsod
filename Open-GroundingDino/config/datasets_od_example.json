@@ -7,7 +7,7 @@
       "dataset_mode": "odvg"
     }
   ],
-  "train": [
+  "train_": [
     {
       "root": "/mnt/f/coco/trainval2014/",
       "anno": "/mnt/f/coco/annotations/coco_fs_30shots_odvg.jsonl",      
@@ -15,7 +15,7 @@
       "dataset_mode": "odvg"
     }
   ],
-  "train1": [
+  "train": [
     {
       "root": "/mnt/f/coco/trainval2014/",
       "anno": "/mnt/f/coco/annotations/coco_fs_30shots_apple_odvg.jsonl",

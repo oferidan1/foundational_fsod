@@ -272,10 +272,44 @@ def do_gdino_visualization(model, caption, image_pil, filename, scores, boxes, l
 
     image_with_box.save(os.path.join(output_dir, name))
 
+
+def topk_by_iou(inputs, boxes_, K=300):
+    gts = []
+    gt_bboxes = inputs[0]['instances'].gt_boxes
+    gt_classes = inputs[0]['instances'].gt_classes
+    for b in gt_bboxes:
+        gts.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])        
+    iscrowd = [int(False)] * len(gt_bboxes)
+    
+    h, w = inputs[0]['height'], inputs[0]['width']
+    boxes = boxes_.clone() * torch.Tensor([w, h, w, h]).to(boxes_.device)
+    boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
+    
+    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
+    ious = torch.from_numpy(ious)
+    #loop over all bbox in gt
+    topk_values, topk_idxs, topk_labels = [], [], []
+    
+    K_ = K // ious.shape[1] + ious.shape[1]
+    for i in range(ious.shape[1]):
+        # topk_idxs_ = ious[:,i].argmax().unsqueeze(0)  
+        # topk_values_ = ious[:,i].max().unsqueeze(0)      
+        topk_values_, topk_idxs_ = torch.topk(ious[:,i], K_, 0)
+        topk_values.append(topk_values_)
+        topk_idxs.append(topk_idxs_)
+        topk_labels.append((gt_classes[i]*torch.ones(K_)))
+        #topk_labels.append(gt_classes[i].unsqueeze(0) )
+        
+    topk_values = torch.cat(topk_values, dim=0)
+    topk_idxs = torch.cat(topk_idxs, dim=0)
+    topk_labels = torch.cat(topk_labels, dim=0)
+    
+    return topk_values, topk_idxs, topk_labels       
+        
 # run gdino model with params
 embed_idx = {}
 def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, dataset_classes, iou_thr=0.7):
-    K = 100
+    K = 300
     #K = 900
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -318,15 +352,18 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         curr_prob_to_label = prob_to_token[i] @ positive_map_list[i].to(prob_to_token.device).T
         prob_to_label_list.append(curr_prob_to_label.to("cpu"))    
     prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, 1203)                  
-    topk_values, topk_idxs = torch.topk(
-        prob_to_label.view(-1), K, 0
-    )
+    #topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)    
+    
+    topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox, K)    
+    
     #topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
     scores = topk_values # Shape: (300,)
     topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
     labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
     topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
     combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)
+    if len(out_bbox.shape) < 3:
+        out_bbox = out_bbox.unsqueeze(0)
     boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
     embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]]
     h, w = inputs[0]['height'], inputs[0]['width']
@@ -335,11 +372,13 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
 
     labels = labels.to(torch.int64)
 
-    topk_scores, topk_idxs = torch.topk(scores, K)
-    labels = labels[topk_idxs]
-    scores = topk_scores
+    #topk_values, topk_idxs = torch.topk(scores, K)
+    #labels = labels[topk_idxs]
+    labels = topk_labels
+    scores = topk_values
     
     result = Instances((h, w))
+    #boxes = boxes[topk_idxs]
     result.pred_boxes = Boxes(boxes)
     result.scores = scores
     result.pred_classes = labels
@@ -355,7 +394,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     # saving embedding of queries to file
     # will be used later as few shots
     fs_create_embedding_iou = 0.5
-    if is_create_fs:    
+    if 0:#is_create_fs:    
         global embed_idx
         #novel category
         gts = []

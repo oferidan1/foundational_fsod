@@ -65,9 +65,9 @@ def default_argument_parser():
     parser = argparse.ArgumentParser(description="FsDet Training")
     parser.add_argument(
         "--config-file",
-        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
+        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
         #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_10shot.yaml",        
-        default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_fc_all_30shot.yaml",
+        #default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_fc_all_30shot.yaml",
         #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_base1.yaml",
         metavar="FILE",
         help="path to config file",
@@ -75,8 +75,8 @@ def default_argument_parser():
     parser.add_argument("--is_gdino", type=int, default=1, help="is gdino model or original model")
     parser.add_argument("--is_sl", type=int, default=0, help="is supporting latents DB for gdino")
     parser.add_argument("--is_PT", type=int, default=0, help="is PT for gdino")
-    parser.add_argument("--data_source", type=str, default='coco', help="voc/coco/lvis")
-    parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
+    parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
+    parser.add_argument("--is_create_fs", type=int, default=1, help="is create fs queries")
     parser.add_argument("--checkpoint", default="/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth", help="gdino checkpoint path")
     parser.add_argument(
         "--resume",

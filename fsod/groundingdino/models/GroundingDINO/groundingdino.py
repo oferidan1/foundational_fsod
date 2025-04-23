@@ -218,13 +218,13 @@ class GroundingDINO(nn.Module):
         #is Prompt Tuning (PT) enabled
         self.is_PT = is_PT
         if is_PT:
-            PT_len = 195
-            ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
-            nn.init.normal_(ctx_vectors, std=0.02)
-            self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
-            self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
-            # self.fs_gdino_rerank = nn.Linear(hidden_dim, hidden_dim)  # to be optimized            
-            # self.fs_gdino_classify = nn.Linear(hidden_dim, hidden_dim)   # to be optimized      
+            # PT_len = 195
+            # ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
+            # nn.init.normal_(ctx_vectors, std=0.02)
+            # self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
+            # self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
+            self.fs_gdino_rerank = nn.Linear(hidden_dim, hidden_dim)  # to be optimized            
+            self.fs_gdino_classify = nn.Linear(hidden_dim, hidden_dim)   # to be optimized      
 
             
     def load_supporting_latents_class7(self):
@@ -354,8 +354,8 @@ class GroundingDINO(nn.Module):
         # fs_gdino
         # add learnt PT rerank to encoded text
         if self.is_PT:
-            encoded_text += self.fs_gdino_rerank
-            #encoded_text = self.fs_gdino_rerank(encoded_text)
+            #encoded_text += self.fs_gdino_rerank
+            encoded_text = encoded_text + self.fs_gdino_rerank(encoded_text)
         
         text_dict = {
             "encoded_text": encoded_text, #.bfloat16(),  # bs, 195, d_model
@@ -415,8 +415,8 @@ class GroundingDINO(nn.Module):
         # fs_gdino
         # add learnt PT classify to hs (text_dict)
         if self.is_PT:
-            text_dict['encoded_text'] += self.fs_gdino_classify
-            #text_dict['encoded_text'] = self.fs_gdino_classify(text_dict['encoded_text'])
+            #text_dict['encoded_text'] += self.fs_gdino_classify
+            text_dict['encoded_text'] = text_dict['encoded_text'] + self.fs_gdino_classify(text_dict['encoded_text'])
         # output
         outputs_class = torch.stack(
             [

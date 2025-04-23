@@ -208,8 +208,8 @@ class Transformer(nn.Module):
 
     def init_ref_points(self, use_num_queries):
         self.refpoint_embed = nn.Embedding(use_num_queries, 4)
-
-    def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
+        
+    def forward__(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
         """
         Input:
             - srcs: List of multi features [bs, ci, hi, wi]
@@ -379,6 +379,280 @@ class Transformer(nn.Module):
             text_attention_mask=~text_dict["text_token_mask"],
             # we ~ the mask . False means use the token; True means pad the token
         )
+        hs_fs = []
+        references_fs = []
+        # fs_gdino
+        # supporting_latents is a ternsor of shape number_of_classes x K x 256 which provides K latents of class boxes from pre-trained gdino encoder
+        if supporting_latents != []:
+            bs = tgt.shape[0]
+            # sf_K : K is the number of supporting latents per class
+            #sf_K = 3
+            sf_K = len(supporting_latents)
+            supporting_latents = supporting_latents.repeat(bs, 1, 1)
+            #loop over supporting_latents, each time take only the per class K latenets
+            for i in range(0, supporting_latents.shape[1], sf_K):                
+                #build queries of K latents per class
+                tgt_K = torch.cat((supporting_latents[:,i:i+sf_K,:], tgt[:,sf_K:,:]), dim=1)
+                #tgt_K = supporting_latents[:,i:i+sf_K,:]
+                hs_fs_i, references_fs_i = self.decoder(
+                    tgt=tgt_K.transpose(0, 1),
+                    memory=memory.transpose(0, 1),
+                    memory_key_padding_mask=mask_flatten,
+                    pos=lvl_pos_embed_flatten.transpose(0, 1),
+                    #refpoints_unsigmoid=refpoint_embed[:,:sf_K,:].transpose(0, 1),
+                    refpoints_unsigmoid=refpoint_embed.transpose(0, 1),
+                    level_start_index=level_start_index,
+                    spatial_shapes=spatial_shapes,
+                    valid_ratios=valid_ratios,
+                    tgt_mask=attn_mask,
+                    memory_text=text_dict["encoded_text"],
+                    text_attention_mask=~text_dict["text_token_mask"],
+                    # we ~ the mask . False means use the token; True means pad the token
+                )            
+                hs_fs_i_ = [hs_fs_i[0][:,:sf_K,:],hs_fs_i[1][:,:sf_K,:],hs_fs_i[2][:,:sf_K,:],hs_fs_i[3][:,:sf_K,:],hs_fs_i[4][:,:sf_K,:],hs_fs_i[5][:,:sf_K,:]]
+                hs_fs_i_ = torch.cat(hs_fs_i_, dim=0)
+                hs_fs.append(hs_fs_i_)
+                references_fs_i_ = [references_fs_i[0][:,:sf_K,:],references_fs_i[1][:,:sf_K,:],references_fs_i[2][:,:sf_K,:],references_fs_i[3][:,:sf_K,:],references_fs_i[4][:,:sf_K,:],references_fs_i[5][:,:sf_K,:]]
+                references_fs_i_ = torch.cat(references_fs_i_, dim=0)
+                references_fs.append(references_fs_i_)
+            hs_fs = torch.cat(hs_fs, dim=1)#.unsqueeze(0)
+            references_fs = torch.cat(references_fs, dim=1)#.unsqueeze(0)
+                
+        #########################################################
+        # End Decoder
+        # hs: n_dec, bs, nq, d_model
+        # references: n_dec+1, bs, nq, query_dim
+        #########################################################
+
+        #########################################################
+        # Begin postprocess
+        #########################################################
+        if self.two_stage_type == "standard":
+            hs_enc = tgt_undetach.unsqueeze(0)
+            ref_enc = refpoint_embed_undetach.sigmoid().unsqueeze(0)
+        else:
+            hs_enc = ref_enc = None
+        #########################################################
+        # End postprocess
+        # hs_enc: (n_enc+1, bs, nq, d_model) or (1, bs, nq, d_model) or (n_enc, bs, nq, d_model) or None
+        # ref_enc: (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or (n_enc, bs, nq, d_model) or None
+        #########################################################
+
+        return hs, references, hs_enc, ref_enc, init_box_proposal, tgt_queries, hs_fs, references_fs
+        # hs: (n_dec, bs, nq, d_model)
+        # references: sigmoid coordinates. (n_dec+1, bs, bq, 4)
+        # hs_enc: (n_enc+1, bs, nq, d_model) or (1, bs, nq, d_model) or None
+        # ref_enc: sigmoid coordinates. \
+        #           (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or None
+
+
+    def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
+        """
+        Input:
+            - srcs: List of multi features [bs, ci, hi, wi]
+            - masks: List of multi masks [bs, hi, wi]
+            - refpoint_embed: [bs, num_dn, 4]. None in infer
+            - pos_embeds: List of multi pos embeds [bs, ci, hi, wi]
+            - tgt: [bs, num_dn, d_model]. None in infer
+
+        """
+        # prepare input for encoder
+        src_flatten = []
+        mask_flatten = []
+        lvl_pos_embed_flatten = []
+        spatial_shapes = []
+        for lvl, (src, mask, pos_embed) in enumerate(zip(srcs, masks, pos_embeds)):
+            bs, c, h, w = src.shape
+            spatial_shape = (h, w)
+            spatial_shapes.append(spatial_shape)
+
+            src = src.flatten(2).transpose(1, 2)  # bs, hw, c
+            mask = mask.flatten(1)  # bs, hw
+            pos_embed = pos_embed.flatten(2).transpose(1, 2)  # bs, hw, c
+            if self.num_feature_levels > 1 and self.level_embed is not None:
+                lvl_pos_embed = pos_embed + self.level_embed[lvl].view(1, 1, -1)
+            else:
+                lvl_pos_embed = pos_embed
+            lvl_pos_embed_flatten.append(lvl_pos_embed)
+            src_flatten.append(src)
+            mask_flatten.append(mask)
+        src_flatten = torch.cat(src_flatten, 1)  # bs, \sum{hxw}, c
+        mask_flatten = torch.cat(mask_flatten, 1)  # bs, \sum{hxw}
+        lvl_pos_embed_flatten = torch.cat(lvl_pos_embed_flatten, 1)  # bs, \sum{hxw}, c
+        spatial_shapes = torch.as_tensor(
+            spatial_shapes, dtype=torch.long, device=src_flatten.device
+        )
+        level_start_index = torch.cat(
+            (spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1])
+        )
+        valid_ratios = torch.stack([self.get_valid_ratio(m) for m in masks], 1)
+
+        # two stage
+        enc_topk_proposals = enc_refpoint_embed = None
+
+        #########################################################
+        # Begin Encoder
+        #########################################################
+        memory, memory_text = self.encoder(
+            src_flatten,
+            pos=lvl_pos_embed_flatten,
+            level_start_index=level_start_index,
+            spatial_shapes=spatial_shapes,
+            valid_ratios=valid_ratios,
+            key_padding_mask=mask_flatten,
+            memory_text=text_dict["encoded_text"],
+            text_attention_mask=~text_dict["text_token_mask"],
+            # we ~ the mask . False means use the token; True means pad the token
+            position_ids=text_dict["position_ids"],
+            text_self_attention_masks=text_dict["text_self_attention_masks"],
+        )
+        #########################################################
+        # End Encoder
+        # - memory: bs, \sum{hw}, c
+        # - mask_flatten: bs, \sum{hw}
+        # - lvl_pos_embed_flatten: bs, \sum{hw}, c
+        # - enc_intermediate_output: None or (nenc+1, bs, nq, c) or (nenc, bs, nq, c)
+        # - enc_intermediate_refpoints: None or (nenc+1, bs, nq, c) or (nenc, bs, nq, c)
+        #########################################################
+        text_dict["encoded_text"] = memory_text
+        # if os.environ.get("SHILONG_AMP_INFNAN_DEBUG") == '1':
+        #     if memory.isnan().any() | memory.isinf().any():
+        #         import ipdb; ipdb.set_trace()
+
+        if self.two_stage_type == "standard":
+            output_memory, output_proposals = gen_encoder_output_proposals(
+                memory, mask_flatten, spatial_shapes
+            )
+            output_memory = self.enc_output_norm(self.enc_output(output_memory))
+
+            if text_dict is not None:
+                enc_outputs_class_unselected = self.enc_out_class_embed(output_memory, text_dict)
+            else:
+                enc_outputs_class_unselected = self.enc_out_class_embed(output_memory)
+
+            topk_logits = enc_outputs_class_unselected.max(-1)[0]
+            enc_outputs_coord_unselected = (
+                self.enc_out_bbox_embed(output_memory) + output_proposals
+            )  # (bs, \sum{hw}, 4) unsigmoid
+            topk = self.num_queries
+            
+            #topk_proposals = torch.topk(topk_logits, topk, dim=1)[1]  # bs, nq            
+            #fs_gdino :: random 900 indices check - verify scores are worst than best indices
+            # topk_proposals = np.random.randint(0, topk_logits.shape[1]-1, (1,topk))
+            # topk_proposals = torch.from_numpy(topk_proposals).to(topk_logits.device)
+            
+            total_k = topk_logits.shape[1]
+            refpoint_embed_all = []
+            tgt_all = []
+            for i in range(0, total_k, topk):
+                max_k = i+topk
+                if max_k > total_k:
+                    #i = total_k-topk
+                    max_k = total_k
+                topk_proposals = np.arange(i, max_k, 1)
+                topk_proposals = torch.from_numpy(topk_proposals).to(topk_logits.device)
+                
+                # gather boxes
+                refpoint_embed_undetach = torch.gather(
+                    enc_outputs_coord_unselected, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4)
+                )  # unsigmoid
+                refpoint_embed_ = refpoint_embed_undetach.detach()
+                init_box_proposal = torch.gather(
+                    output_proposals, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4)
+                ).sigmoid()  # sigmoid
+
+                # gather tgt
+                tgt_undetach = torch.gather(
+                    output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, self.d_model)
+                )
+                if self.embed_init_tgt:
+                    tgt_ = (
+                        self.tgt_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
+                    )  # nq, bs, d_model
+                else:
+                    tgt_ = tgt_undetach.detach()
+
+                if refpoint_embed is not None:
+                    refpoint_embed = torch.cat([refpoint_embed, refpoint_embed_], dim=1)
+                    tgt = torch.cat([tgt, tgt_], dim=1)
+                else:
+                    refpoint_embed, tgt = refpoint_embed_, tgt_
+                    
+                refpoint_embed_all.append(refpoint_embed)
+                tgt_all.append(tgt)
+            
+            # refpoint_embed = torch.cat(refpoint_embed_all, dim=0)
+            # tgt = torch.cat(tgt_all, dim=0)
+
+        elif self.two_stage_type == "no":
+            tgt_ = (
+                self.tgt_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
+            )  # nq, bs, d_model
+            refpoint_embed_ = (
+                self.refpoint_embed.weight[:, None, :].repeat(1, bs, 1).transpose(0, 1)
+            )  # nq, bs, 4
+
+            if refpoint_embed is not None:
+                refpoint_embed = torch.cat([refpoint_embed, refpoint_embed_], dim=1)
+                tgt = torch.cat([tgt, tgt_], dim=1)
+            else:
+                refpoint_embed, tgt = refpoint_embed_, tgt_
+
+            if self.num_patterns > 0:
+                tgt_embed = tgt.repeat(1, self.num_patterns, 1)
+                refpoint_embed = refpoint_embed.repeat(1, self.num_patterns, 1)
+                tgt_pat = self.patterns.weight[None, :, :].repeat_interleave(
+                    self.num_queries, 1
+                )  # 1, n_q*n_pat, d_model
+                tgt = tgt_embed + tgt_pat
+
+            init_box_proposal = refpoint_embed_.sigmoid()
+
+        else:
+            raise NotImplementedError("unknown two_stage_type {}".format(self.two_stage_type))
+        #########################################################
+        # End preparing tgt
+        # - tgt: bs, NQ, d_model
+        # - refpoint_embed(unsigmoid): bs, NQ, d_model
+        #########################################################
+        tgt_queries = tgt.clone()        
+        #########################################################
+        # Begin Decoder
+        #########################################################
+        hs_all = []
+        references_all = []
+        topk_i = topk
+        for i in range(0, total_k, topk):
+            max_k = i+topk
+            if max_k > total_k:
+                #i = total_k-topk
+                #max_k = total_k
+                topk_i =  total_k - i
+            hs, references = self.decoder(
+                #tgt=tgt.transpose(0, 1),
+                tgt=tgt[:,i:i+topk_i,:].transpose(0, 1),
+                memory=memory.transpose(0, 1),
+                memory_key_padding_mask=mask_flatten,
+                pos=lvl_pos_embed_flatten.transpose(0, 1),
+                #refpoints_unsigmoid=refpoint_embed.transpose(0, 1),
+                refpoints_unsigmoid=refpoint_embed[:,i:i+topk_i,:].transpose(0, 1),
+                level_start_index=level_start_index,
+                spatial_shapes=spatial_shapes,
+                valid_ratios=valid_ratios,
+                tgt_mask=attn_mask,
+                memory_text=text_dict["encoded_text"],
+                text_attention_mask=~text_dict["text_token_mask"],
+                # we ~ the mask . False means use the token; True means pad the token
+            )
+            hs_i = [hs[0],hs[1],hs[2],hs[3],hs[4],hs[5]]
+            hs_i = torch.cat(hs_i, dim=0)
+            hs_all.append(hs_i)
+            references_i = [references[0],references[1],references[2],references[3],references[4],references[5]]
+            references_i = torch.cat(references_i, dim=0)
+            references_all.append(references_i)
+        hs = torch.cat(hs_all, dim=1)#.unsqueeze(0)
+        references = torch.cat(references_all, dim=1)#.unsqueeze(0)
+            
         hs_fs = []
         references_fs = []
         # fs_gdino
