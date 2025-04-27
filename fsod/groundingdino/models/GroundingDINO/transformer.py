@@ -209,7 +209,7 @@ class Transformer(nn.Module):
     def init_ref_points(self, use_num_queries):
         self.refpoint_embed = nn.Embedding(use_num_queries, 4)
         
-    def forward__(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
+    def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
         """
         Input:
             - srcs: List of multi features [bs, ci, hi, wi]
@@ -446,7 +446,7 @@ class Transformer(nn.Module):
         #           (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or None
 
 
-    def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
+    def forward_all(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
         """
         Input:
             - srcs: List of multi features [bs, ci, hi, wi]

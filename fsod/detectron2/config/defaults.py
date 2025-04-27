@@ -65,7 +65,9 @@ _C.INPUT.MIN_SIZE_TEST = 800
 _C.INPUT.MAX_SIZE_TEST = 1333
 # Mode for flipping images used in data augmentation during training
 # choose one of ["horizontal, "vertical", "none"]
-_C.INPUT.RANDOM_FLIP = "horizontal"
+#_C.INPUT.RANDOM_FLIP = "horizontal"
+#ofer
+_C.INPUT.RANDOM_FLIP = "none"
 
 # `True` if cropping is used for data augmentation during training
 _C.INPUT.CROP = CN({"ENABLED": False})

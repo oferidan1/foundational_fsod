@@ -212,8 +212,8 @@ class GroundingDINO(nn.Module):
         #self.supporting_latents = defaultdict(list)
         self.supporting_latents = []        
         if is_supporting_latents:
-            #self.load_supporting_latents_clusters()
-            self.load_supporting_latents_class7()          
+            self.load_supporting_latents_clusters()
+            #self.load_supporting_latents_class7()          
         
         #is Prompt Tuning (PT) enabled
         self.is_PT = is_PT
@@ -265,7 +265,7 @@ class GroundingDINO(nn.Module):
                 supporting_keys.append(int(key))
             queries = torch.cat(queries, dim=0)
             self.supporting_latents.append(queries)
-        self.supporting_latents = torch.cat(self.supporting_latents, dim=0)
+        self.supporting_latents = torch.cat(self.supporting_latents, dim=0).cuda()
         self.supporting_classes = np.array(supporting_keys)       
             
 
@@ -300,11 +300,11 @@ class GroundingDINO(nn.Module):
             captions = [t["caption"] for t in targets]
         len(captions)
         supporting_latents = []
-        #supporting_latents = self.supporting_latents        
-        if 'filename' in kw:
-            filename = kw["filename"]
-            if filename in self.supporting_latents:
-                supporting_latents = self.supporting_latents[filename]                           
+        supporting_latents = self.supporting_latents        
+        # if 'filename' in kw:
+        #     filename = kw["filename"]
+        #     if filename in self.supporting_latents:
+        #         supporting_latents = self.supporting_latents[filename]                           
 
         # encoder texts
         tokenized = self.tokenizer(captions, padding="longest", return_tensors="pt").to(

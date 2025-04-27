@@ -276,7 +276,7 @@ def voc_eval(
         lines = f.readlines()
     imagenames = [x.strip() for x in lines]
 
-    # load annots
+    # load annots 
     recs = {}
     for imagename in imagenames:
         recs[imagename] = parse_rec(annopath.format(imagename))

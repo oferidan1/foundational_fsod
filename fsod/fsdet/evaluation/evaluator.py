@@ -276,9 +276,13 @@ def do_gdino_visualization(model, caption, image_pil, filename, scores, boxes, l
 def topk_by_iou(inputs, boxes_, K=300):
     gts = []
     gt_bboxes = inputs[0]['instances'].gt_boxes
-    gt_classes = inputs[0]['instances'].gt_classes
+    gt_classes = inputs[0]['instances'].gt_classes    
+    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+    h_real, w_real  = inputs[0]['instances'].image_size    
+    h_ratio = h_orig/h_real
+    w_ratio = w_orig/w_real    
     for b in gt_bboxes:
-        gts.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])        
+        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])        
     iscrowd = [int(False)] * len(gt_bboxes)
     
     h, w = inputs[0]['height'], inputs[0]['width']
@@ -291,32 +295,65 @@ def topk_by_iou(inputs, boxes_, K=300):
     topk_values, topk_idxs, topk_labels = [], [], []
     
     K_ = K // ious.shape[1] + ious.shape[1]
+    #iou_thr = 0.0
     for i in range(ious.shape[1]):
-        # topk_idxs_ = ious[:,i].argmax().unsqueeze(0)  
-        # topk_values_ = ious[:,i].max().unsqueeze(0)      
-        topk_values_, topk_idxs_ = torch.topk(ious[:,i], K_, 0)
-        topk_values.append(topk_values_)
-        topk_idxs.append(topk_idxs_)
-        topk_labels.append((gt_classes[i]*torch.ones(K_)))
-        #topk_labels.append(gt_classes[i].unsqueeze(0) )
-        
-    topk_values = torch.cat(topk_values, dim=0)
-    topk_idxs = torch.cat(topk_idxs, dim=0)
-    topk_labels = torch.cat(topk_labels, dim=0)
+        topk_idxs_ = ious[:,i].argmax().unsqueeze(0)  
+        topk_values_ = ious[:,i].max().unsqueeze(0)      
+        #topk_values_, topk_idxs_ = torch.topk(ious[:,i], K_, 0)
+        # topk_iou_thr = topk_values_ > iou_thr
+        # topk_values_ = topk_values_[topk_iou_thr]
+        # topk_idxs_ = topk_idxs_[topk_iou_thr]        
+        if len(topk_idxs_)>0:
+            topk_values.append(topk_values_)
+            topk_idxs.append(topk_idxs_)
+            #topk_labels.append((gt_classes[i]*torch.ones(len(topk_idxs_))))
+            topk_labels.append(gt_classes[i].unsqueeze(0) )
     
-    return topk_values, topk_idxs, topk_labels       
+    if len(topk_values)>0:
+        topk_values = torch.cat(topk_values, dim=0)
+        topk_idxs = torch.cat(topk_idxs, dim=0)
+        topk_labels = torch.cat(topk_labels, dim=0)
+    
+    return topk_values, topk_idxs, topk_labels
+
+
+#get GT prediction - for sanity only
+def get_gt_preds(inputs):
+    gt_bboxes = inputs[0]['instances'].gt_boxes
+    gt_classes = inputs[0]['instances'].gt_classes
+    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+    h_real, w_real  = inputs[0]['instances'].image_size    
+    h_ratio = h_orig/h_real
+    w_ratio = w_orig/w_real
+    bbs = []
+    for b in gt_bboxes:
+        bb = torch.Tensor([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])
+        bbs.append(bb.unsqueeze(0))
+    gt_bboxes_scaled = Boxes(torch.cat(bbs, dim=0))    
+    result = Instances(inputs[0]['instances'].image_size)    
+    result.pred_boxes = gt_bboxes_scaled
+    result.scores = torch.ones(len(gt_classes))
+    result.pred_classes = gt_classes
+    
+    final_outputs = []
+    curr_output = {}
+    curr_output['instances'] = result
+    final_outputs.append(curr_output)      
+    
+    return final_outputs, 0
         
 # run gdino model with params
 embed_idx = {}
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, dataset_classes, iou_thr=0.7):
-    K = 300
-    #K = 900
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, K, dataset_classes, iou_thr=0.7):
+    #return get_gt_preds(inputs)
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
     start_compute_time = time.time()
     filename = os.path.basename(inputs[0]["file_name"])
+    
     with torch.no_grad():
         outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr, filename=filename)
+        
     torch.cuda.synchronize()
     total_compute_time = time.time() - start_compute_time
     out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
@@ -325,19 +362,10 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     matched_boxes_idx = outputs["original_matched_boxes"]
     matched_boxes_classes = outputs["original_matched_boxes_classes"]    
     prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
+    boxes = []
     
-    thr_gain = 10
-    cat_batch_id = 0 #= fs_category_id // positive_map_list[0].shape[0]
-    # fs_category_id = matched_boxes_classes
-    # cat_offset_id = fs_category_id % positive_map_list[0].shape[0]
-    # cat_indexes = torch.where(positive_map_list[cat_batch_id][cat_offset_id]>0)[0]
-    # cols = torch.zeros(prob_to_token[0].shape).to(prob_to_token.device)    
-    # cols[:,cat_indexes] = prob_to_token[cat_batch_id][:,cat_indexes]
-    # rows = torch.zeros(prob_to_token[0].shape).to(prob_to_token.device)#*(cat_sim.squeeze(1) > thr_cat).unsqueeze(1)        
-    # rows[matched_boxes_idx,:] = prob_to_token[cat_batch_id][matched_boxes_idx, :]
-    # prob_to_token[cat_batch_id] = prob_to_token[cat_batch_id] + rows*cols*thr_gain   
-    
-    
+    thr_gain = 2
+    cat_batch_id = 0 #= fs_category_id // positive_map_list[0].shape[0]    
     #loop over matched_boxes_idx and update relevant class prob
     for i in range(len(matched_boxes_idx)):
         box_id = matched_boxes_idx[i]
@@ -352,33 +380,37 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         curr_prob_to_label = prob_to_token[i] @ positive_map_list[i].to(prob_to_token.device).T
         prob_to_label_list.append(curr_prob_to_label.to("cpu"))    
     prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, 1203)                  
-    #topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)    
     
-    topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox, K)    
+    if is_gt_iou:    
+        topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox.squeeze(0), K)    
+    else:
+        topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)    
     
-    #topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
+    
+    # # topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
     scores = topk_values # Shape: (300,)
     topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
     labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
     topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
-    combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)
+    combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)    
     if len(out_bbox.shape) < 3:
         out_bbox = out_bbox.unsqueeze(0)
     boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
-    embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]]
-    h, w = inputs[0]['height'], inputs[0]['width']
+    embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)    
+    if is_gt_iou:    
+        boxes = out_bbox.squeeze(0)[topk_idxs].to("cpu") 
+               
+    h, w = inputs[0]['height'], inputs[0]['width']    
     boxes = boxes * torch.Tensor([w, h, w, h])
     boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
-
-    labels = labels.to(torch.int64)
-
-    #topk_values, topk_idxs = torch.topk(scores, K)
-    #labels = labels[topk_idxs]
-    labels = topk_labels
-    scores = topk_values
-    
+    if is_gt_iou:    
+        labels = topk_labels
+    else:
+        labels = labels.to(torch.int64)
+        topk_values, topk_idxs = torch.topk(scores, K)
+        labels = labels[topk_idxs]    
+    scores = topk_values    
     result = Instances((h, w))
-    #boxes = boxes[topk_idxs]
     result.pred_boxes = Boxes(boxes)
     result.scores = scores
     result.pred_classes = labels
@@ -394,24 +426,28 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     # saving embedding of queries to file
     # will be used later as few shots
     fs_create_embedding_iou = 0.5
-    if 0:#is_create_fs:    
+    if is_create_fs:    
+        h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+        h_real, w_real  = inputs[0]['instances'].image_size    
+        h_ratio = h_orig/h_real
+        w_ratio = w_orig/w_real
         global embed_idx
         #novel category
         gts = []
         gt_bboxes = inputs[0]['instances'].gt_boxes
         gt_classes = inputs[0]['instances'].gt_classes
         for b in gt_bboxes:
-            gts.append([b[0], b[1], b[0]+b[2], b[1]+b[3]])        
+            gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
         iscrowd = [int(False)] * len(gt_bboxes)
         ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
         #loop over all bbox in gt
-        for i in range(ious.shape[1]):
+        for i in range(ious.shape[1]):            
             max_iou = ious[:,i].max()     
             gt_class = gt_classes[i].item()      
             
-            target_class = 2            
+            target_class = 7            
             if gt_class == target_class:
-                with open("class2_files.txt", "a") as myfile:
+                with open("class7_files.txt", "a") as myfile:
                     name = os.path.basename(inputs[0]["file_name"])
                     to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
                     myfile.write(to_write)
@@ -422,9 +458,9 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
                 target_embed = embeds[idx]                
                 if gt_class not in embed_idx:
                     embed_idx[gt_class] = 0            
-                #filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)
-                name = os.path.basename(inputs[0]["file_name"])
-                filename = 'queries/{name}.pt'.format(name=name)
+                # name = os.path.basename(inputs[0]["file_name"])
+                filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)                
+                # filename = 'queries/{name}.pt'.format(name=name)
                 torch.save(target_embed, filename)
                 embed_idx[gt_class] += 1
         
@@ -479,7 +515,7 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, dataset_classes)
+                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.topk, dataset_classes)
                 total_compute_time += compute_time
                 
             evaluator.process(inputs, outputs)
