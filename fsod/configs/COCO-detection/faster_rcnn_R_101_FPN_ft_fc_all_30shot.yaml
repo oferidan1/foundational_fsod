@@ -12,10 +12,11 @@ MODEL:
   PROPOSAL_GENERATOR:
     FREEZE: True
 DATASETS:
-  TRAIN: ('coco_trainval_all_30shot',)
+  #TRAIN: ('coco_trainval_all_30shot',)
+  TRAIN: ('coco_test_all',)
   TEST: ('coco_test_all',)
 SOLVER:
-  IMS_PER_BATCH: 16
+  IMS_PER_BATCH: 1
   BASE_LR: 0.001
   STEPS: (216000,)
   MAX_ITER: 240000

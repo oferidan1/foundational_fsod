@@ -445,7 +445,7 @@ class Transformer(nn.Module):
         # ref_enc: sigmoid coordinates. \
         #           (n_enc+1, bs, nq, query_dim) or (1, bs, nq, query_dim) or None
 
-
+    #def forward(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
     def forward_all(self, srcs, masks, refpoint_embed, pos_embeds, tgt, attn_mask=None, text_dict=None, supporting_latents=None):
         """
         Input:
