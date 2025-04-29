@@ -60,7 +60,7 @@ def load_lvis_json(json_file, image_root, dataset_name=None, extra_annotation_ke
         1. This function does not read the image files.
            The results do not have the "image" field.
     """
-    from lvis import LVIS
+    from lvis.lvis import LVIS
 
     json_file = PathManager.get_local_path(json_file)
 

@@ -316,11 +316,9 @@ def topk_by_iou(inputs, boxes_, K=300):
     
     return topk_values, topk_idxs, topk_labels
 
-
-#get GT prediction - for sanity only
-def get_gt_preds(inputs):
-    gt_bboxes = inputs[0]['instances'].gt_boxes
-    gt_classes = inputs[0]['instances'].gt_classes
+#rescale bb to output size
+def rescale_bb(inputs):
+    gt_bboxes = inputs[0]['instances'].gt_boxes    
     h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
     h_real, w_real  = inputs[0]['instances'].image_size    
     h_ratio = h_orig/h_real
@@ -329,7 +327,13 @@ def get_gt_preds(inputs):
     for b in gt_bboxes:
         bb = torch.Tensor([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])
         bbs.append(bb.unsqueeze(0))
-    gt_bboxes_scaled = Boxes(torch.cat(bbs, dim=0))    
+    gt_bboxes_scaled = Boxes(torch.cat(bbs, dim=0))   
+    return  gt_bboxes_scaled
+
+#get GT prediction - for sanity only
+def get_gt_preds(inputs):   
+    gt_classes = inputs[0]['instances'].gt_classes
+    gt_bboxes_scaled = rescale_bb(inputs)
     result = Instances(inputs[0]['instances'].image_size)    
     result.pred_boxes = gt_bboxes_scaled
     result.scores = torch.ones(len(gt_classes))
@@ -341,6 +345,31 @@ def get_gt_preds(inputs):
     final_outputs.append(curr_output)      
     
     return final_outputs, 0
+
+SL_TP , SL_FP, SL_FN, SL_TN, SL_TOTAL = 0, 0, 0, 0, 0
+def verify_pred(inputs, results, supporting_classes, iou_thr):
+    global SL_TP , SL_FP, SL_FN, SL_TN, SL_TOTAL
+    gt_classes = inputs[0]['instances'].gt_classes
+    gt_bboxes_scaled = rescale_bb(inputs)
+    
+    iscrowd = [int(False)] * len(gt_bboxes_scaled)
+    ious = mask_utils.iou(results.pred_boxes.tensor.tolist(), gt_bboxes_scaled.tensor.tolist(), iscrowd)
+    
+    for i in range(len(results.pred_classes)):
+        pred_class = results.pred_classes[i]
+        for j in range(len(gt_classes)):
+            gt_class = gt_classes[j]
+            if pred_class == supporting_classes[0]:
+                if gt_class == supporting_classes[0] and ious[i][j]>=iou_thr:
+                    SL_TP += 1
+                else:
+                    SL_FP += 1
+            else:                    
+                if gt_class == supporting_classes[0]:
+                    SL_FN += 1
+                else:
+                    SL_TN += 1
+        SL_TOTAL += 1
         
 # run gdino model with params
 embed_idx = {}
@@ -351,8 +380,30 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     start_compute_time = time.time()
     filename = os.path.basename(inputs[0]["file_name"])
     
-    with torch.no_grad():
-        outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr, filename=filename)
+    if len(text_prompt_list)>1: #LVIS data has 1203 classes
+        image1 = image.repeat(8, 1, 1, 1)        
+        image2 = image.repeat(7, 1, 1, 1)            
+        with torch.no_grad():    
+            output1 = model(image1, captions = text_prompt_list[0:8])
+            output2 = model(image2, captions = text_prompt_list[8:])
+        
+        if len(output1['original_matched_boxes']):
+            outputs = {'pred_logits':torch.cat((output1['pred_logits'], output2['pred_logits'])), 
+                        'pred_boxes': torch.cat((output1['pred_boxes'], output2['pred_boxes'])), 
+                        'pred_embeds': torch.cat((output1['pred_embeds'], output2['pred_embeds'])),
+                        'pred_queries': torch.cat((output1['pred_queries'], output2['pred_queries'])),
+                        'original_matched_boxes': torch.cat((output1['original_matched_boxes'], output2['original_matched_boxes'])),
+                        'original_matched_boxes_classes': torch.cat((output1['original_matched_boxes_classes'], output2['original_matched_boxes_classes']))}    
+        else:
+            outputs = {'pred_logits':torch.cat((output1['pred_logits'], output2['pred_logits'])), 
+                  'pred_boxes': torch.cat((output1['pred_boxes'], output2['pred_boxes'])), 
+                  'pred_embeds': torch.cat((output1['pred_embeds'], output2['pred_embeds'])),
+                  'pred_queries': torch.cat((output1['pred_queries'], output2['pred_queries'])),
+                  'original_matched_boxes': [], 'original_matched_boxes_classes': []}
+        
+    else:
+        with torch.no_grad():
+            outputs = model(image, captions=text_prompt_list, iou_thr=iou_thr, filename=filename)
         
     torch.cuda.synchronize()
     total_compute_time = time.time() - start_compute_time
@@ -418,7 +469,10 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     final_outputs = []
     curr_output = {}
     curr_output['instances'] = result
-    final_outputs.append(curr_output)           
+    final_outputs.append(curr_output)          
+    
+    # if len(model.supporting_classes):
+    #     verify_pred(inputs, result, model.supporting_classes, 0.5)
     
     #visualization
     #do_gdino_visualization(model, text_prompt_list, image_src, inputs[0]["file_name"], scores, boxes, labels, dataset_classes)
@@ -553,6 +607,10 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
             num_devices,
         )
     )
+    
+    global SL_TP , SL_FP, SL_FN, SL_TN, SL_TOTAL
+    print("TP: {}, FP: {}, FN: {}".format(SL_TP , SL_FP, SL_FN))
+    print("Accuracy: {}", SL_TP/(SL_FP+SL_FN))
 
     results = evaluator.evaluate()
     # An evaluator may return None when not in main process.
