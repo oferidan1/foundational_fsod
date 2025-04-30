@@ -417,7 +417,8 @@ class GroundingDINO(nn.Module):
         if self.is_PT:
             #text_dict['encoded_text'] += self.fs_gdino_classify
             text_dict['encoded_text'] = text_dict['encoded_text'] + self.fs_gdino_classify(text_dict['encoded_text'])
-        # output
+            
+        # output class
         outputs_class = torch.stack(
             [
                 layer_cls_embed(layer_hs, text_dict)

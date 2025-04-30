@@ -371,8 +371,90 @@ def verify_pred(inputs, results, supporting_classes, iou_thr):
                     SL_TN += 1
         SL_TOTAL += 1
         
+#save embeds
+def save_embeds(inputs, embeds, scores, boxes):
+    fs_create_embedding_iou = 0.5
+    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+    h_real, w_real  = inputs[0]['instances'].image_size    
+    h_ratio = h_orig/h_real
+    w_ratio = w_orig/w_real
+    global embed_idx
+    #novel category
+    gts = []
+    gt_bboxes = inputs[0]['instances'].gt_boxes
+    gt_classes = inputs[0]['instances'].gt_classes
+    for b in gt_bboxes:
+        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
+    iscrowd = [int(False)] * len(gt_bboxes)
+    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
+    #loop over all bbox in gt
+    for i in range(ious.shape[1]):            
+        max_iou = ious[:,i].max()     
+        gt_class = gt_classes[i].item()      
+        
+        target_class = 7            
+        if gt_class == target_class:
+            with open("class7_files.txt", "a") as myfile:
+                name = os.path.basename(inputs[0]["file_name"])
+                to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
+                myfile.write(to_write)
+                myfile.write("\n")            
+        
+        if max_iou > fs_create_embedding_iou and gt_class==target_class:
+            # good_boxes = ious[:,i]>0.5
+            #save per image:
+            #latent, iou, score
+            # embeds_ = embeds[good_boxes]         
+            # scores_ = scores[good_boxes]
+            # ious_ = ious[good_boxes, i]          
+            frame_info = {'embeds': embeds, 'scores': scores, "ious": ious[:,i]}            
+            
+            name = os.path.basename(inputs[0]["file_name"])                
+            filename = 'embeds/{name}_{i}.pt'.format(name=name, i=i)
+            torch.save(frame_info, filename)
+            
+#save queries
+embed_idx = {}    
+def save_queries(inputs, embeds, scores, boxes):
+    fs_create_embedding_iou = 0.5
+    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+    h_real, w_real  = inputs[0]['instances'].image_size    
+    h_ratio = h_orig/h_real
+    w_ratio = w_orig/w_real
+    global embed_idx
+    #novel category
+    gts = []
+    gt_bboxes = inputs[0]['instances'].gt_boxes
+    gt_classes = inputs[0]['instances'].gt_classes
+    for b in gt_bboxes:
+        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
+    iscrowd = [int(False)] * len(gt_bboxes)
+    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
+    #loop over all bbox in gt
+    for i in range(ious.shape[1]):            
+        max_iou = ious[:,i].max()     
+        gt_class = gt_classes[i].item()      
+        
+        target_class = 7            
+        if gt_class == target_class:
+            with open("class7_files.txt", "a") as myfile:
+                name = os.path.basename(inputs[0]["file_name"])
+                to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
+                myfile.write(to_write)
+                myfile.write("\n")            
+    
+        if max_iou > fs_create_embedding_iou and gt_class==target_class:
+            idx = ious[:,i].argmax()                                   
+            target_embed = queries[idx]                
+            if gt_class not in embed_idx:
+                embed_idx[gt_class] = 0            
+            # name = os.path.basename(inputs[0]["file_name"])
+            filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)                
+            # filename = 'queries/{name}.pt'.format(name=name)
+            torch.save(target_embed, filename)
+            embed_idx[gt_class] += 1
+
 # run gdino model with params
-embed_idx = {}
 def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, K, dataset_classes, iou_thr=0.7):
     #return get_gt_preds(inputs)
     length = 81
@@ -409,7 +491,8 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     total_compute_time = time.time() - start_compute_time
     out_logits = outputs["pred_logits"]  # prediction_logits.shape = (batch, nq, 256)
     out_bbox = outputs["pred_boxes"] # prediction_boxes.shape = (batch, nq, 4)    
-    out_embeds = outputs["pred_queries"]
+    out_embeds = outputs["pred_embeds"]
+    out_queries = outputs["pred_queries"]
     matched_boxes_idx = outputs["original_matched_boxes"]
     matched_boxes_classes = outputs["original_matched_boxes_classes"]    
     prob_to_token = out_logits.sigmoid() # prob_to_token.shape = (batch, nq, 256)
@@ -435,8 +518,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     if is_gt_iou:    
         topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox.squeeze(0), K)    
     else:
-        topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)    
-    
+        topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)        
     
     # # topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
     scores = topk_values # Shape: (300,)
@@ -479,44 +561,8 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     
     # saving embedding of queries to file
     # will be used later as few shots
-    fs_create_embedding_iou = 0.5
-    if is_create_fs:    
-        h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
-        h_real, w_real  = inputs[0]['instances'].image_size    
-        h_ratio = h_orig/h_real
-        w_ratio = w_orig/w_real
-        global embed_idx
-        #novel category
-        gts = []
-        gt_bboxes = inputs[0]['instances'].gt_boxes
-        gt_classes = inputs[0]['instances'].gt_classes
-        for b in gt_bboxes:
-            gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
-        iscrowd = [int(False)] * len(gt_bboxes)
-        ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
-        #loop over all bbox in gt
-        for i in range(ious.shape[1]):            
-            max_iou = ious[:,i].max()     
-            gt_class = gt_classes[i].item()      
-            
-            target_class = 7            
-            if gt_class == target_class:
-                with open("class7_files.txt", "a") as myfile:
-                    name = os.path.basename(inputs[0]["file_name"])
-                    to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
-                    myfile.write(to_write)
-                    myfile.write("\n")
-            
-            if max_iou > fs_create_embedding_iou and gt_class==target_class:
-                idx = ious[:,i].argmax()   
-                target_embed = embeds[idx]                
-                if gt_class not in embed_idx:
-                    embed_idx[gt_class] = 0            
-                # name = os.path.basename(inputs[0]["file_name"])
-                filename = 'queries/class{gt_class}_idx{embed_idx}_iou{max_iou:.2f}.pt'.format(gt_class=gt_class, embed_idx=embed_idx[gt_class], max_iou=max_iou)                
-                # filename = 'queries/{name}.pt'.format(name=name)
-                torch.save(target_embed, filename)
-                embed_idx[gt_class] += 1
+    if is_create_fs:
+        save_embeds(inputs, embeds, scores, boxes)
         
     return final_outputs, total_compute_time
 
@@ -608,9 +654,9 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
         )
     )
     
-    global SL_TP , SL_FP, SL_FN, SL_TN, SL_TOTAL
-    print("TP: {}, FP: {}, FN: {}".format(SL_TP , SL_FP, SL_FN))
-    print("Accuracy: {}", SL_TP/(SL_FP+SL_FN))
+    # global SL_TP , SL_FP, SL_FN, SL_TN, SL_TOTAL
+    # print("TP: {}, FP: {}, FN: {}".format(SL_TP , SL_FP, SL_FN))
+    # print("Accuracy: {}", SL_TP/(SL_FP+SL_FN))
 
     results = evaluator.evaluate()
     # An evaluator may return None when not in main process.
