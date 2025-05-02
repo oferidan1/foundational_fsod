@@ -53,6 +53,8 @@ import numpy as np
 import glob
 import os
 
+from fsod_adaptor.model.model import FSOD_Adaptor
+
 class GroundingDINO(nn.Module):
     """This is the Cross-Attention Detector module that performs object detection"""
 
@@ -218,13 +220,16 @@ class GroundingDINO(nn.Module):
         #is Prompt Tuning (PT) enabled
         self.is_PT = is_PT
         if is_PT:
-            # PT_len = 195
-            # ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
-            # nn.init.normal_(ctx_vectors, std=0.02)
-            # self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
-            # self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
-            self.fs_gdino_rerank = nn.Linear(hidden_dim, hidden_dim)  # to be optimized            
-            self.fs_gdino_classify = nn.Linear(hidden_dim, hidden_dim)   # to be optimized      
+            self.FSOD_Adaptor = FSOD_Adaptor()
+            
+        # if is_PT:
+        #     # PT_len = 195
+        #     # ctx_vectors = torch.empty(PT_len, hidden_dim, dtype=torch.float32)
+        #     # nn.init.normal_(ctx_vectors, std=0.02)
+        #     # self.fs_gdino_rerank = nn.Parameter(ctx_vectors)  # to be optimized            
+        #     # self.fs_gdino_classify = nn.Parameter(ctx_vectors)  # to be optimized      
+        #     self.fs_gdino_rerank = nn.Linear(hidden_dim, hidden_dim)  # to be optimized            
+        #     self.fs_gdino_classify = nn.Linear(hidden_dim, hidden_dim)   # to be optimized      
 
             
     def load_supporting_latents_class7(self):
@@ -352,10 +357,10 @@ class GroundingDINO(nn.Module):
             ]
             
         # fs_gdino
-        # add learnt PT rerank to encoded text
-        if self.is_PT:
-            #encoded_text += self.fs_gdino_rerank
-            encoded_text = encoded_text + self.fs_gdino_rerank(encoded_text)
+        # # add learnt PT rerank to encoded text
+        # if self.is_PT:
+        #     #encoded_text += self.fs_gdino_rerank
+        #     encoded_text = encoded_text + self.fs_gdino_rerank(encoded_text)
         
         text_dict = {
             "encoded_text": encoded_text, #.bfloat16(),  # bs, 195, d_model
@@ -363,6 +368,8 @@ class GroundingDINO(nn.Module):
             "position_ids": position_ids,  # bs, 195
             "text_self_attention_masks": text_self_attention_masks,  # bs, 195,195
         }
+        
+        text_dict_cloned = copy.deepcopy(text_dict)
 
         # import ipdb; ipdb.set_trace()
         #torch.save(text_dict, 'embeds/text_embed_7.pth')
@@ -414,10 +421,10 @@ class GroundingDINO(nn.Module):
         outputs_coord_list = torch.stack(outputs_coord_list)
 
         # fs_gdino
-        # add learnt PT classify to hs (text_dict)
-        if self.is_PT:
-            #text_dict['encoded_text'] += self.fs_gdino_classify
-            text_dict['encoded_text'] = text_dict['encoded_text'] + self.fs_gdino_classify(text_dict['encoded_text'])
+        # # add learnt PT classify to hs (text_dict)
+        # if self.is_PT:
+        #     #text_dict['encoded_text'] += self.fs_gdino_classify
+        #     text_dict['encoded_text'] = text_dict['encoded_text'] + self.fs_gdino_classify(text_dict['encoded_text'])
             
         # output class
         outputs_class = torch.stack(
@@ -425,13 +432,17 @@ class GroundingDINO(nn.Module):
                 layer_cls_embed(layer_hs, text_dict)
                 for layer_cls_embed, layer_hs in zip(self.class_embed, hs)
             ]
-        )
+        )        
         
         outputs_classes = outputs_class[-1]
         outputs_coords = outputs_coord_list[-1]
+        
+        if self.is_PT:
+            outputs_classes = self.FSOD_Adaptor(hs[-1], text_dict_cloned)
+            
+        # fs_gdino
         original_matched_boxes_idx = []
         original_matched_boxes_classes = []
-        # fs_gdino
         # if leart queries executed, hs_fs exists
         if hs_fs != []:
             fs_box_iou_thr = kw["iou_thr"]

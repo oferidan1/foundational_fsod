@@ -140,7 +140,7 @@ def main(args):
         is_gdino_model = args.is_gdino
         
         if is_gdino_model:
-            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", args.checkpoint, args.is_sl, args.is_PT)        
+            model = load_gdino_model("cfg/GroundingDINO/GDINO.py", args.checkpoint, args.is_sl, args.is_PT, args.fsod_adaptor)        
         if args.eval_iter != -1:
             # load checkpoint at specified iteration
             ckpt_file = os.path.join(

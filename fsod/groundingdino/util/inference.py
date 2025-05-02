@@ -25,7 +25,7 @@ def preprocess_caption(caption: str) -> str:
     return result + "."
 
 
-def load_gdino_model(model_config_path: str, model_checkpoint_path: str, is_supporting_latents, is_PT, device: str = "cuda"):
+def load_gdino_model(model_config_path: str, model_checkpoint_path: str, is_supporting_latents, is_PT, fsod_adaptor_path, device: str = "cuda"):
     args = SLConfig.fromfile(model_config_path)
     args.device = device
     args.is_supporting_latents = is_supporting_latents
@@ -33,6 +33,10 @@ def load_gdino_model(model_config_path: str, model_checkpoint_path: str, is_supp
     model = build_model(args)
     checkpoint = torch.load(model_checkpoint_path, map_location="cpu")
     model.load_state_dict(clean_state_dict(checkpoint["model"]), strict=False)
+    if is_PT:
+        checkpoint = torch.load(fsod_adaptor_path, map_location="cpu")
+        model.FSOD_Adaptor.load_state_dict(clean_state_dict(checkpoint), strict=False)
+        
     model.eval()
     return model
 
