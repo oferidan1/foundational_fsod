@@ -80,7 +80,7 @@ def default_argument_parser():
     parser.add_argument("--is_gt_iou", type=int, default=0, help="is gt iou for box finding")
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument("--topk", type=int, default=900, help="topk value")
-    parser.add_argument("--score_thr", type=float, default=0.1, help="topk value")
+    parser.add_argument("--score_thr", type=float, default=0.2, help="topk value")
     parser.add_argument("--checkpoint", default="/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth", help="gdino checkpoint path")
     parser.add_argument("--fsod_adaptor", default='/mnt/d/ofer/vlm/foundational_fsod/fsod/fsod_adaptor/output/fsod_adaptor.pt', help="fsod_adaptor checkpoint path")    
     parser.add_argument(
