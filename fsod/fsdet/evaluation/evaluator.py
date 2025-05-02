@@ -386,36 +386,37 @@ def save_embeds(inputs, embeds, scores, boxes):
     for b in gt_bboxes:
         gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
     iscrowd = [int(False)] * len(gt_bboxes)
-    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
-    #loop over all bbox in gt
-    for i in range(ious.shape[1]):            
-        max_iou = ious[:,i].max()     
-        gt_class = gt_classes[i].item()      
+    ious = mask_utils.iou(boxes.tensor.tolist(), gts, iscrowd)
+    
+    frame_info = {'embeds': embeds, 'scores': scores, "ious": ious, 'gt_class': gt_classes}            
+    
+    name = os.path.basename(inputs[0]["file_name"])                
+    filename = 'embeds/{name}.pt'.format(name=name)
+    torch.save(frame_info, filename)
+    
+    # #loop over all bbox in gt
+    # for i in range(ious.shape[1]):            
+    #     max_iou = ious[:,i].max()     
+    #     gt_class = gt_classes[i].item()      
         
-        target_class = 7            
-        if gt_class == target_class:
-            with open("class7_files.txt", "a") as myfile:
-                name = os.path.basename(inputs[0]["file_name"])
-                to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
-                myfile.write(to_write)
-                myfile.write("\n")            
+    #     target_class = 7            
+    #     if gt_class == target_class:
+    #         with open("class7_files.txt", "a") as myfile:
+    #             name = os.path.basename(inputs[0]["file_name"])
+    #             to_write = "{filename}, {iou}, {gt}".format(filename=name, iou=max_iou, gt=gts)
+    #             myfile.write(to_write)
+    #             myfile.write("\n")            
         
-        if max_iou > fs_create_embedding_iou and gt_class==target_class:
-            # good_boxes = ious[:,i]>0.5
-            #save per image:
-            #latent, iou, score
-            # embeds_ = embeds[good_boxes]         
-            # scores_ = scores[good_boxes]
-            # ious_ = ious[good_boxes, i]          
-            frame_info = {'embeds': embeds, 'scores': scores, "ious": ious[:,i]}            
+    #     if max_iou > fs_create_embedding_iou and gt_class==target_class:
+    #         frame_info = {'embeds': embeds, 'scores': scores, "ious": ious[:,i], 'gt_class': gt_class}            
             
-            name = os.path.basename(inputs[0]["file_name"])                
-            filename = 'embeds/{name}_{c}_{i}.pt'.format(name=name, c=gt_class, i=i)
-            torch.save(frame_info, filename)
+    #         name = os.path.basename(inputs[0]["file_name"])                
+    #         filename = 'embeds/{name}_{c}_{i}.pt'.format(name=name, c=gt_class, i=i)
+    #         torch.save(frame_info, filename)
             
 #save queries
 embed_idx = {}    
-def save_queries(inputs, embeds, scores, boxes):
+def save_queries(inputs, queries, scores, boxes):
     fs_create_embedding_iou = 0.5
     h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
     h_real, w_real  = inputs[0]['instances'].image_size    
@@ -455,7 +456,7 @@ def save_queries(inputs, embeds, scores, boxes):
             embed_idx[gt_class] += 1
 
 # run gdino model with params
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, K, dataset_classes, iou_thr=0.7):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, K, score_thr, dataset_classes, iou_thr=0.7):
     #return get_gt_preds(inputs)
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -518,33 +519,45 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     if is_gt_iou:    
         topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox.squeeze(0), K)    
     else:
-        topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)        
-    
-    # # topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
-    scores = topk_values # Shape: (300,)
-    topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
-    labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
-    topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
-    combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)    
-    if len(out_bbox.shape) < 3:
-        out_bbox = out_bbox.unsqueeze(0)
-    boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
-    embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)    
-    if is_gt_iou:    
-        boxes = out_bbox.squeeze(0)[topk_idxs].to("cpu") 
-               
+        topk_values, topk_idxs = torch.topk(prob_to_label.view(-1), K, 0)      
+        
     h, w = inputs[0]['height'], inputs[0]['width']    
-    boxes = boxes * torch.Tensor([w, h, w, h])
-    boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
-    if is_gt_iou:    
-        labels = topk_labels
+    #take boxes with minimal similarity score
+    topk_values_thr = topk_values>score_thr
+    if sum(topk_values_thr)>0:
+        topk_values = topk_values[topk_values_thr]
+        topk_idxs = topk_idxs[topk_values_thr]        
+    
+        # # topk_idxs contains the index of the flattened tensor. We need to convert it to the index in the original tensor
+        scores = topk_values # Shape: (300,)
+        topk_boxes = topk_idxs // prob_to_label.shape[1] # to determine the index in 'num_query' dimension. Shape: (300,)
+        labels = topk_idxs % prob_to_label.shape[1] # to determine the index in 'num_category' dimension. Shape: (300,)
+        topk_boxes_batch_idx = labels // length # to determine the index in 'batch_size' dimension. Shape: (300,)
+        combined_box_index = torch.stack((topk_boxes_batch_idx, topk_boxes), dim=1)    
+        if len(out_bbox.shape) < 3:
+            out_bbox = out_bbox.unsqueeze(0)
+        boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
+        embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)    
+        if is_gt_iou:    
+            boxes = out_bbox.squeeze(0)[topk_idxs].to("cpu")                 
+        
+        boxes = boxes * torch.Tensor([w, h, w, h])
+        boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
+        if is_gt_iou:    
+            labels = topk_labels
+        else:
+            labels = labels.to(torch.int64)
+            # topk_values, topk_idxs = torch.topk(scores, K)
+            # labels = labels[topk_idxs]    
+        scores = topk_values    
+        boxes = Boxes(boxes)
+        #debug: diningtable=7
+        labels+=7
     else:
-        labels = labels.to(torch.int64)
-        topk_values, topk_idxs = torch.topk(scores, K)
-        labels = labels[topk_idxs]    
-    scores = topk_values    
+        boxes, scores, labels = [], [], []
+        
     result = Instances((h, w))
-    result.pred_boxes = Boxes(boxes)
+    result.pred_boxes = boxes
     result.scores = scores
     result.pred_classes = labels
     
@@ -615,7 +628,7 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.topk, dataset_classes)
+                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.topk, args.score_thr, dataset_classes)
                 total_compute_time += compute_time
                 
             evaluator.process(inputs, outputs)

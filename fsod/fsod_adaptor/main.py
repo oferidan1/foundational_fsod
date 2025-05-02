@@ -20,7 +20,7 @@ if __name__ == "__main__":
     arg_parser.add_argument("--lr_scheduler_gamma", type=float, help="lr_scheduler_gamma", default="10")
     arg_parser.add_argument("--batch_size", type=int, help="batch_size", default="128")
     arg_parser.add_argument("--n_workers", type=int, help="n_workers", default="4")
-    arg_parser.add_argument("--epochs", type=int, help="epochs", default="20")    
+    arg_parser.add_argument("--epochs", type=int, help="epochs", default="50")    
     arg_parser.add_argument("--n_freq_print", type=int, help="n_freq_print", default="10")        
     arg_parser.add_argument("--gpu", help="gpu id", default="0")
     arg_parser.add_argument("--output", help="output dir", default="output")

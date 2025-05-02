@@ -31,20 +31,34 @@ class LatentDataset(Dataset):
 def build_latents_data(dataset_path):
     files = glob.glob(dataset_path+'/*.pt')
     EP, HP, EN, HN = [], [], [], []
+    iou_thr = 0.5
+    score_thr = 0.05
+    target_class = 7
     #load all files to dict
     for file in  files:
         info = torch.load(file)
-        #info fields: {'embeds', 'scores', "ious"}    
+        #info fields: {'embeds', 'scores', "ious", "gt_classes"}    
         scores = info['scores']
-        ious = torch.from_numpy(info['ious'])
+        ious_all = torch.from_numpy(info['ious'])
         embeds = info['embeds']
+        gt_classes = info['gt_class']
         #set embeds to buckets of HP, EP, HN, EN according to ious and scores        
-        iou_thr = 0.5
-        score_thr = 0.05
-        EP.append(embeds[(ious>iou_thr)&(scores>score_thr)])
-        HP.append(embeds[(ious>iou_thr)&(scores<=score_thr)])
-        HN.append(embeds[(ious<=iou_thr)&(scores>score_thr)])
-        EN.append(embeds[(ious<=iou_thr)&(scores<=score_thr)])
+        for i in range(ious_all.shape[1]):        
+            ious = ious_all[:,i]
+            #if we are on target class images
+            if gt_classes[i] == target_class:
+                EP.append(embeds[(ious>iou_thr)&(scores>score_thr)])
+                HP.append(embeds[(ious>iou_thr)&(scores<=score_thr)])
+                HN.append(embeds[(ious<=iou_thr)&(scores>score_thr)])
+                EN.append(embeds[(ious<=iou_thr)&(scores<=score_thr)])
+            else:
+                #look for HN in non target class
+                if max(scores) > score_thr:
+                    HN.append(embeds[scores>score_thr])                    
+                    EN.append(embeds[scores<score_thr])                    
+                else:
+                    EN.append(embeds)                    
+                    
     
     EP = torch.cat(EP, dim=0)
     HP = torch.cat(HP, dim=0)
