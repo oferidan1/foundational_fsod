@@ -365,6 +365,7 @@ class GroundingDINO(nn.Module):
         }
 
         # import ipdb; ipdb.set_trace()
+        #torch.save(text_dict, 'embeds/text_embed_7.pth')
 
         if isinstance(samples, (list, torch.Tensor)):
             samples = nested_tensor_from_tensor_list(samples)

@@ -410,7 +410,7 @@ def save_embeds(inputs, embeds, scores, boxes):
             frame_info = {'embeds': embeds, 'scores': scores, "ious": ious[:,i]}            
             
             name = os.path.basename(inputs[0]["file_name"])                
-            filename = 'embeds/{name}_{i}.pt'.format(name=name, i=i)
+            filename = 'embeds/{name}_{c}_{i}.pt'.format(name=name, c=gt_class, i=i)
             torch.save(frame_info, filename)
             
 #save queries
