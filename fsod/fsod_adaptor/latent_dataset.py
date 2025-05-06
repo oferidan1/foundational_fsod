@@ -32,7 +32,7 @@ def build_latents_data(dataset_path):
     files = glob.glob(dataset_path+'/*.pt')
     EP, HP, EN, HN = [], [], [], []
     iou_thr = 0.5
-    score_thr = 0.05
+    score_thr = 0.2
     target_class = 7
     #load all files to dict
     for file in  files:

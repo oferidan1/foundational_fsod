@@ -274,22 +274,9 @@ def do_gdino_visualization(model, caption, image_pil, filename, scores, boxes, l
 
 
 def topk_by_iou(inputs, boxes_, K=300):
-    gts = []
-    gt_bboxes = inputs[0]['instances'].gt_boxes
-    gt_classes = inputs[0]['instances'].gt_classes    
-    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
-    h_real, w_real  = inputs[0]['instances'].image_size    
-    h_ratio = h_orig/h_real
-    w_ratio = w_orig/w_real    
-    for b in gt_bboxes:
-        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])        
-    iscrowd = [int(False)] * len(gt_bboxes)
-    
-    h, w = inputs[0]['height'], inputs[0]['width']
-    boxes = boxes_.clone() * torch.Tensor([w, h, w, h]).to(boxes_.device)
-    boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
-    
-    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
+    gts = []    
+    gt_classes = inputs[0]['instances'].gt_classes        
+    ious = compute_iou(inputs, boxes_)    
     ious = torch.from_numpy(ious)
     #loop over all bbox in gt
     topk_values, topk_idxs, topk_labels = [], [], []
@@ -374,27 +361,17 @@ def verify_pred(inputs, results, supporting_classes, iou_thr):
 #save embeds
 def save_embeds(inputs, embeds, scores, boxes):
     fs_create_embedding_iou = 0.5
-    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
-    h_real, w_real  = inputs[0]['instances'].image_size    
-    h_ratio = h_orig/h_real
-    w_ratio = w_orig/w_real
     global embed_idx
     #novel category
-    gts = []
-    gt_bboxes = inputs[0]['instances'].gt_boxes
     gt_classes = inputs[0]['instances'].gt_classes
-    for b in gt_bboxes:
-        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
-    iscrowd = [int(False)] * len(gt_bboxes)
-    ious = mask_utils.iou(boxes.tensor.tolist(), gts, iscrowd)
-    
+    ious = compute_iou(inputs, boxes)    
     frame_info = {'embeds': embeds, 'scores': scores, "ious": ious, 'gt_class': gt_classes}            
     
     name = os.path.basename(inputs[0]["file_name"])                
     filename = 'embeds/{name}.pt'.format(name=name)
     torch.save(frame_info, filename)
     
-    # #loop over all bbox in gt
+    # # #loop over all bbox in gt
     # for i in range(ious.shape[1]):            
     #     max_iou = ious[:,i].max()     
     #     gt_class = gt_classes[i].item()      
@@ -413,24 +390,14 @@ def save_embeds(inputs, embeds, scores, boxes):
     #         name = os.path.basename(inputs[0]["file_name"])                
     #         filename = 'embeds/{name}_{c}_{i}.pt'.format(name=name, c=gt_class, i=i)
     #         torch.save(frame_info, filename)
-            
+    
+    
 #save queries
 embed_idx = {}    
 def save_queries(inputs, queries, scores, boxes):
     fs_create_embedding_iou = 0.5
-    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
-    h_real, w_real  = inputs[0]['instances'].image_size    
-    h_ratio = h_orig/h_real
-    w_ratio = w_orig/w_real
-    global embed_idx
-    #novel category
-    gts = []
-    gt_bboxes = inputs[0]['instances'].gt_boxes
     gt_classes = inputs[0]['instances'].gt_classes
-    for b in gt_bboxes:
-        gts.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
-    iscrowd = [int(False)] * len(gt_bboxes)
-    ious = mask_utils.iou(boxes.tolist(), gts, iscrowd)
+    ious = compute_iou(inputs, boxes)    
     #loop over all bbox in gt
     for i in range(ious.shape[1]):            
         max_iou = ious[:,i].max()     
@@ -455,8 +422,125 @@ def save_queries(inputs, queries, scores, boxes):
             torch.save(target_embed, filename)
             embed_idx[gt_class] += 1
 
+
+def expected_calibration_error(samples, true_labels, M=5):
+    # uniform binning approach with M number of bins
+    bin_boundaries = np.linspace(0, 1, M + 1)
+    bin_lowers = bin_boundaries[:-1]
+    bin_uppers = bin_boundaries[1:]
+
+    # get max probability per sample i
+    confidences = torch.max(samples, dim=1).values
+    #confidences = samples.max()
+    # get predictions from confidences (positional in this case)
+    predicted_label = torch.argmax(samples, dim=1)
+    #predicted_label = samples.argmax()
+
+    # get a boolean list of correct/false predictions
+    accuracies = predicted_label==true_labels
+
+    ece = torch.zeros(1)
+    for bin_lower, bin_upper in zip(bin_lowers, bin_uppers):
+        # determine if sample is in bin m (between bin lower &amp; upper)
+        in_bin = torch.logical_and(confidences > bin_lower, confidences <= bin_upper).type(torch.int)
+        # can calculate the empirical probability of a sample falling into bin m: (|Bm|/n)
+        prob_in_bin = in_bin.type(torch.float).mean()
+        #prob_in_bin = in_bin
+
+        if prob_in_bin.item() > 0:
+            # get the accuracy of bin m: acc(Bm)
+            accuracy_in_bin = accuracies[in_bin].type(torch.float).mean()
+            # get the average confidence of bin m: conf(Bm)
+            avg_confidence_in_bin = confidences[in_bin].mean()
+            # calculate |acc(Bm) - conf(Bm)| * (|Bm|/n) for bin m and add to the total ECE
+            ece += torch.abs(avg_confidence_in_bin - accuracy_in_bin) * prob_in_bin
+    return ece
+
+def compute_iou(inputs, pred_boxes):
+    h_orig, w_orig = inputs[0]['height'], inputs[0]['width']
+    h_real, w_real = inputs[0]['instances'].image_size    
+    h_ratio = h_orig/h_real
+    w_ratio = w_orig/w_real
+    gt_bboxes = inputs[0]['instances'].gt_boxes
+    gt_classes = inputs[0]['instances'].gt_classes     
+    gt_bb = []  
+    for b in gt_bboxes:
+        gt_bb.append([b[0]*w_ratio+1, b[1]*h_ratio+1, b[2]*w_ratio, b[3]*h_ratio])          
+    iscrowd = [int(False)] * len(gt_bboxes)
+    ious = mask_utils.iou(pred_boxes.tensor.tolist(), gt_bb, iscrowd)
+    return ious
+
+def compute_calibration_error_(inputs, prob_to_label, boxes):
+    # for each category get its 900 predicted sigmoid 
+    # create the binary labels from the GT 
+    # call ece
+    iou_thr = 0.5
+    ious = compute_iou(inputs, boxes)
+    gt_classes = inputs[0]['instances'].gt_classes     
+    num_pred_boxes, num_categories = prob_to_label.shape
+    prob_to_label_sm = prob_to_label.softmax(dim=1)   
+    ece = []
+    for i in range(ious.shape[1]):
+        gt_class = gt_classes[i]
+        iou_greater = np.where(ious[:,i]>iou_thr,1,0)
+        labels = prob_to_label[iou_greater, gt_class]>0
+        ece_i = expected_calibration_error(prob_to_label_sm, labels)
+        ece.append(ece_i)
+        
+    # for i in range(num_categories):
+    #     pred_box_prob = prob_to_label[:,i]        
+    #     prob_to_label_sm = prob_to_label.softmax(dim=1)   
+    #     cat_box_indices = torch.where(gt_classes==i)[0] 
+    #     ece_i = 0
+    #     if len(cat_box_indices) and (np.max(ious[:,cat_box_indices])>iou_thr):
+    #         label = np.argmax(ious[:,cat_box_indices])
+    #         ece_i = expected_calibration_error(pred_box_prob, label)
+    #     ece.append(ece_i)
+
+
+def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
+    # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
+    # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
+    # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
+    # pred_coords: (num_pred_boxes, 4) gives the coordinates for each predicted box
+
+    # Step 1: compute the  ground truth label for each predicted box
+    ious = compute_iou(inputs, pred_box_coords)
+    gt_classes = inputs[0]['instances'].gt_classes     
+    matching_gt_box_ids = np.argmax(ious, axis=0) # (num_gt_boxes) - gives the pred box id for each gt box    
+    pred_box_labels = torch.ones(pred_box_coords.tensor.shape[0], gt_classes.shape[0])
+    for i in range(len(gt_classes)):
+        pred_box_labels[:,i] *=  gt_classes[i]
+        #pred_box_labels[matching_gt_box_ids[i],i] = gt_classes[i]
+    #gt_box_classes[matching_gt_box_ids] = 1
+    #pred_box_labels = gt_box_classes[matching_gt_box_ids] # assign each pred box the class of the gt box with the highest iou
+    pred_box_labels[ious.max(axis=1) < iou_threshold] = -1  # set to -1 if no gt box has iou > 0.5
+
+    # Step 2: compute the expected calibration error (ECE) for each binary classifier
+    # Note: later this can be extended to other types of calibration error
+    num_classes = pred_box_probs.shape[1]
+    eces = np.zeros(num_classes)
+    
+    j = 0
+    for i in range(num_classes):
+        # get the ground truth labels for class i, for each box by setting all other classes to 0
+        if j<len(gt_classes) and gt_classes[j] == i:        
+            gt_labels_i = (pred_box_labels[:,j] == i).type(torch.float32) # (num_pred_boxes) 
+            j += 1
+        else:
+            gt_labels_i = torch.zeros(pred_box_labels.shape[0])            
+        # get the predicted probabilities for class i
+        pred_probs_i = pred_box_probs[:, i].unsqueeze(0)# (num_pred_boxes)
+        # transform into binary-like probabilities for ECE function
+        pred_probs_i = torch.cat((1-pred_probs_i, pred_probs_i), axis=0).T # (num_pred_boxes, 2)
+        # compute the ECE
+        eces[i] = expected_calibration_error(pred_probs_i, gt_labels_i)
+
+    return eces
+
+        
 # run gdino model with params
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, K, score_thr, dataset_classes, iou_thr=0.7):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, is_ece, K, score_thr, dataset_classes, iou_thr=0.7):
     #return get_gt_preds(inputs)
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -514,7 +598,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         # (nq, 256) @ (num_categories, 256).T -> (nq, num_categories)
         curr_prob_to_label = prob_to_token[i] @ positive_map_list[i].to(prob_to_token.device).T
         prob_to_label_list.append(curr_prob_to_label.to("cpu"))    
-    prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, 1203)                  
+    prob_to_label = torch.cat(prob_to_label_list, dim = 1) # shape: (nq, number of categories)                  
     
     if is_gt_iou:    
         topk_values, topk_idxs, topk_labels = topk_by_iou(inputs, out_bbox.squeeze(0), K)    
@@ -539,8 +623,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         boxes = out_bbox[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)
         embeds = out_embeds[combined_box_index[:, 0], combined_box_index[:, 1]].to("cpu") # Shape: (300, 4)    
         if is_gt_iou:    
-            boxes = out_bbox.squeeze(0)[topk_idxs].to("cpu")                 
-        
+            boxes = out_bbox.squeeze(0)[topk_idxs].to("cpu")                         
         boxes = boxes * torch.Tensor([w, h, w, h])
         boxes = box_convert(boxes = boxes, in_fmt = "cxcywh", out_fmt = "xyxy")
         if is_gt_iou:    
@@ -552,9 +635,13 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
         scores = topk_values    
         boxes = Boxes(boxes)
         #debug: diningtable=7
-        labels+=7
+        #labels+=7
     else:
         boxes, scores, labels = [], [], []
+    
+    eces = 0
+    if is_ece:
+        eces = compute_calibration_error(inputs, prob_to_label, boxes)
         
     result = Instances((h, w))
     result.pred_boxes = boxes
@@ -577,7 +664,7 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
     if is_create_fs:
         save_embeds(inputs, embeds, scores, boxes)
         
-    return final_outputs, total_compute_time
+    return final_outputs, total_compute_time, eces
 
 def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list, evaluator, dataset_classes, args):
     """
@@ -614,8 +701,17 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
     num_warmup = min(5, logging_interval - 1, total - 1)
     start_time = time.time()
     total_compute_time = 0
+    eces_list = []
+    with open("class7_files_test_names.txt") as f:
+        class7_names = f.read()
     with inference_context(model), torch.no_grad():
         for idx, inputs in enumerate(data_loader):
+            
+            #run only on classs7 images
+            filename = os.path.basename(inputs[0]['file_name'])
+            if args.is_class7 and filename not in class7_names:
+                continue            
+            
             if idx == num_warmup:
                 start_time = time.time()
                 total_compute_time = 0
@@ -628,8 +724,9 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.topk, args.score_thr, dataset_classes)
+                outputs, compute_time, eces = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.is_ece, args.topk, args.score_thr, dataset_classes)
                 total_compute_time += compute_time
+                eces_list.append(eces)
                 
             evaluator.process(inputs, outputs)
 
@@ -647,6 +744,11 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                     )
                 )
 
+
+    eces_mean = np.mean(eces_list, axis=0)
+    print("-----------------------------")
+    print("mean ECEs: {}".format(eces_mean))
+    print("-----------------------------")
     # Measure the time only for this worker (before the synchronization barrier)
     total_time = int(time.time() - start_time)
     total_time_str = str(datetime.timedelta(seconds=total_time))

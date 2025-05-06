@@ -65,8 +65,8 @@ def default_argument_parser():
     parser = argparse.ArgumentParser(description="FsDet Training")
     parser.add_argument(
         "--config-file",
-        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
-        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_10shot.yaml",        
+        default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_1shot.yaml",
+        #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_ft_all1_10shot.yaml",        
         #default="configs/COCO-detection/faster_rcnn_R_101_FPN_ft_fc_all_30shot.yaml",
         #default="configs/PascalVOC-detection/split1/faster_rcnn_R_101_FPN_base1.yaml",
         #default="configs/LVIS-detection/faster_rcnn_R_50_FPN_combined_all_norepeat.yaml",
@@ -79,8 +79,10 @@ def default_argument_parser():
     parser.add_argument("--data_source", type=str, default='voc', help="voc/coco/lvis")
     parser.add_argument("--is_gt_iou", type=int, default=0, help="is gt iou for box finding")
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
+    parser.add_argument("--is_ece", type=int, default=1, help="is compute ece")
+    parser.add_argument("--is_class7", type=int, default=0, help="is_class7 only test")
     parser.add_argument("--topk", type=int, default=900, help="topk value")
-    parser.add_argument("--score_thr", type=float, default=0.2, help="topk value")
+    parser.add_argument("--score_thr", type=float, default=0.0, help="topk value")
     parser.add_argument("--checkpoint", default="/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth", help="gdino checkpoint path")
     parser.add_argument("--fsod_adaptor", default='/mnt/d/ofer/vlm/foundational_fsod/fsod/fsod_adaptor/output/fsod_adaptor.pt', help="fsod_adaptor checkpoint path")    
     parser.add_argument(
@@ -592,12 +594,12 @@ class DefaultTrainer(SimpleTrainer):
         #fs_gdino
         #ofer : TRAIN / TEST datasets
         dataset_mode = cfg.DATASETS.TEST
-        if args is not None and (args.is_create_fs or args.is_gt_iou):
+        if args is not None and (args.is_create_fs or args.is_gt_iou or args.is_ece):
             dataset_mode = cfg.DATASETS.TRAIN            
             cfg['DATALOADER']['ASPECT_RATIO_GROUPING'] = False
             
         for idx, dataset_name in enumerate(dataset_mode):
-            if args is not None and (args.is_create_fs or args.is_gt_iou):
+            if args is not None and (args.is_create_fs or args.is_gt_iou or args.is_ece):
                 data_loader = cls.build_train_loader(cfg)
             else:
                 data_loader = cls.build_test_loader(cfg, dataset_name)            
