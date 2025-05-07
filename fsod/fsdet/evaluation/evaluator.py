@@ -471,7 +471,7 @@ def compute_iou(inputs, pred_boxes):
     return ious
 
 
-def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
+def compute_calibration_error_y(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
     # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
     # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
     # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
@@ -501,7 +501,7 @@ def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_thres
 
     return eces    
 
-def compute_calibration_error_mine(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
+def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
     # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
     # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
     # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
@@ -510,14 +510,8 @@ def compute_calibration_error_mine(inputs, pred_box_probs, pred_box_coords, iou_
     # Step 1: compute the  ground truth label for each predicted box
     ious = compute_iou(inputs, pred_box_coords)
     gt_classes = inputs[0]['instances'].gt_classes     
-    matching_gt_box_ids = np.argmax(ious, axis=0) # (num_gt_boxes) - gives the pred box id for each gt box    
-    pred_box_labels = torch.ones(pred_box_coords.tensor.shape[0], gt_classes.shape[0])
-    for i in range(len(gt_classes)):
-        pred_box_labels[:,i] *=  gt_classes[i]
-        #pred_box_labels[matching_gt_box_ids[i],i] = gt_classes[i]
-    #gt_box_classes[matching_gt_box_ids] = 1
-    #pred_box_labels = gt_box_classes[matching_gt_box_ids] # assign each pred box the class of the gt box with the highest iou
-    pred_box_labels[ious.max(axis=1) < iou_threshold] = -1  # set to -1 if no gt box has iou > 0.5
+    pred_box_labels = torch.ones(pred_box_coords.tensor.shape[0], gt_classes.shape[0])*gt_classes        
+    pred_box_labels[ious < iou_threshold] = -1  # set to -1 if no gt box has iou > 0.5
 
     # Step 2: compute the expected calibration error (ECE) for each binary classifier
     # Note: later this can be extended to other types of calibration error
