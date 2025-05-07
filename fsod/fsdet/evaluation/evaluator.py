@@ -470,35 +470,38 @@ def compute_iou(inputs, pred_boxes):
     ious = mask_utils.iou(pred_boxes.tensor.tolist(), gt_bb, iscrowd)
     return ious
 
-def compute_calibration_error_(inputs, prob_to_label, boxes):
-    # for each category get its 900 predicted sigmoid 
-    # create the binary labels from the GT 
-    # call ece
-    iou_thr = 0.5
-    ious = compute_iou(inputs, boxes)
-    gt_classes = inputs[0]['instances'].gt_classes     
-    num_pred_boxes, num_categories = prob_to_label.shape
-    prob_to_label_sm = prob_to_label.softmax(dim=1)   
-    ece = []
-    for i in range(ious.shape[1]):
-        gt_class = gt_classes[i]
-        iou_greater = np.where(ious[:,i]>iou_thr,1,0)
-        labels = prob_to_label[iou_greater, gt_class]>0
-        ece_i = expected_calibration_error(prob_to_label_sm, labels)
-        ece.append(ece_i)
-        
-    # for i in range(num_categories):
-    #     pred_box_prob = prob_to_label[:,i]        
-    #     prob_to_label_sm = prob_to_label.softmax(dim=1)   
-    #     cat_box_indices = torch.where(gt_classes==i)[0] 
-    #     ece_i = 0
-    #     if len(cat_box_indices) and (np.max(ious[:,cat_box_indices])>iou_thr):
-    #         label = np.argmax(ious[:,cat_box_indices])
-    #         ece_i = expected_calibration_error(pred_box_prob, label)
-    #     ece.append(ece_i)
-
 
 def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
+    # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
+    # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
+    # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
+    # pred_coords: (num_pred_boxes, 4) gives the coordinates for each predicted box
+
+    # Step 1: compute the  ground truth label for each predicted box
+    ious = compute_iou(inputs, pred_box_coords)
+    gt_classes = inputs[0]['instances'].gt_classes     
+    matching_gt_box_ids = np.argmax(ious, axis=1) # (num_gt_boxes) - gives the pred box id for each gt box        
+    gt_box_classes = torch.ones(pred_box_coords.tensor.shape[0], gt_classes.shape[0])*gt_classes
+    pred_box_gt_labels = gt_box_classes[0][matching_gt_box_ids] # assign each pred box the class of the gt box with the highest iou
+    pred_box_gt_labels[ious.max(axis=1) < iou_threshold] = -1  # set to -1 if no gt box has iou > 0.5
+    # Step 2: compute the expected calibration error (ECE) for each binary classifier
+    # Note: later this can be extended to other types of calibration error
+    num_classes = pred_box_probs.shape[1]
+    eces = np.zeros(num_classes)
+    
+    for i in range(num_classes):
+        # get the ground truth labels for class i, for each box by setting all other classes to 0
+        labels_i = (pred_box_gt_labels == i).type(torch.float32) # (num_pred_boxes) 
+        # get the predicted probabilities for class i
+        probs_i = pred_box_probs[:, i].unsqueeze(0) # (num_pred_boxes) - the sigmoids for category i
+        # transform into binary-like probabilities for ECE function
+        probs_i = torch.cat([1-probs_i, probs_i], dim=0).T # (num_pred_boxes, 2)
+        # compute the ECE
+        eces[i] = expected_calibration_error(probs_i, labels_i)
+
+    return eces    
+
+def compute_calibration_error_mine(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
     # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
     # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
     # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
