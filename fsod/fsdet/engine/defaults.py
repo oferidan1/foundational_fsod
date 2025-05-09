@@ -81,6 +81,8 @@ def default_argument_parser():
     parser.add_argument("--is_create_fs", type=int, default=0, help="is create fs queries")
     parser.add_argument("--is_ece", type=int, default=1, help="is compute ece")
     parser.add_argument("--is_class7", type=int, default=0, help="is_class7 only test")
+    parser.add_argument("--class_offset", type=int, default=0, help="class offset in case of single class inference")
+    parser.add_argument("--class_name", type=str, default='', help="class name in case of single class inference")
     parser.add_argument("--topk", type=int, default=900, help="topk value")
     parser.add_argument("--score_thr", type=float, default=0.0, help="topk value")
     parser.add_argument("--checkpoint", default="/mnt/d/ofer/vlm/cooperative-foundational-models/model_weights/GDINO_weights.pth", help="gdino checkpoint path")

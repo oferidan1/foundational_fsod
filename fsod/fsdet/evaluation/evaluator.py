@@ -501,7 +501,7 @@ def compute_calibration_error_y(inputs, pred_box_probs, pred_box_coords, iou_thr
 
     return eces    
 
-def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_threshold=0.5):
+def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, class_offset, iou_threshold=0.5):
     # gt_classes: (num_gt_boxes) gives the class id for each ground truth box
     # gt_coords: (num_gt_boxes, 4) gives the coordinates for each ground truth box
     # pred_box_probs: (num_pred_boxes, num_classes) gives the logits for each predicted box
@@ -518,11 +518,19 @@ def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_thres
     num_classes = pred_box_probs.shape[1]
     eces = np.zeros(num_classes)
     
+    #turn pred_box_probs to probability
+    if num_classes > 1:
+        sm = torch.nn.Softmax(dim=1)
+        pred_box_probs = sm(pred_box_probs)
+    
     j = 0
-    for i in range(num_classes):
+    for i in range(num_classes):        
+        target_class = i
+        #debug - only 1 class. diningtable is 7
+        target_class += class_offset
         # get the ground truth labels for class i, for each box by setting all other classes to 0
-        if j<len(gt_classes) and gt_classes[j] == i:        
-            gt_labels_i = (pred_box_labels[:,j] == i).type(torch.float32) # (num_pred_boxes) 
+        if j<len(gt_classes) and gt_classes[j] == target_class:        
+            gt_labels_i = (pred_box_labels[:,j] == target_class).type(torch.float32) # (num_pred_boxes) 
             j += 1
         else:
             gt_labels_i = torch.zeros(pred_box_labels.shape[0])            
@@ -537,7 +545,7 @@ def compute_calibration_error(inputs, pred_box_probs, pred_box_coords, iou_thres
 
         
 # run gdino model with params
-def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, is_ece, K, score_thr, dataset_classes, iou_thr=0.7):
+def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, is_gt_iou, is_ece, K, score_thr, dataset_classes, class_offset, iou_thr=0.7):
     #return get_gt_preds(inputs)
     length = 81
     image, image_src = prepare_image_for_GDINO(inputs[0])
@@ -631,14 +639,16 @@ def run_gdino(model, inputs, text_prompt_list, positive_map_list, is_create_fs, 
             # labels = labels[topk_idxs]    
         scores = topk_values    
         boxes = Boxes(boxes)
+        
+        topk_prob_to_label = prob_to_label[combined_box_index[:,1],:]
         #debug: diningtable=7
-        #labels+=7
+        labels += class_offset
     else:
         boxes, scores, labels = [], [], []
     
     eces = 0
     if is_ece:
-        eces = compute_calibration_error(inputs, prob_to_label, boxes)
+        eces = compute_calibration_error(inputs, topk_prob_to_label, boxes, class_offset)
         
     result = Instances((h, w))
     result.pred_boxes = boxes
@@ -721,7 +731,7 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                 total_compute_time += time.time() - start_compute_time            
             else:
                 # fs_gdino
-                outputs, compute_time, eces = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.is_ece, args.topk, args.score_thr, dataset_classes)
+                outputs, compute_time, eces = run_gdino(model, inputs, text_prompt_list, positive_map_list, args.is_create_fs, args.is_gt_iou, args.is_ece, args.topk, args.score_thr, dataset_classes, args.class_offset)
                 total_compute_time += compute_time
                 eces_list.append(eces)
                 
@@ -741,11 +751,9 @@ def inference_on_dataset(model, data_loader, text_prompt_list, positive_map_list
                     )
                 )
 
-
     eces_mean = np.mean(eces_list, axis=0)
-    print("-----------------------------")
-    print("mean ECEs: {}".format(eces_mean))
-    print("-----------------------------")
+    logger.info("mean ECE: {}, {}, {:.3f}".format(args.class_name, args.class_offset, eces_mean[0]))
+    
     # Measure the time only for this worker (before the synchronization barrier)
     total_time = int(time.time() - start_time)
     total_time_str = str(datetime.timedelta(seconds=total_time))

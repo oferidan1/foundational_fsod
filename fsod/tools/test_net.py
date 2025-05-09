@@ -160,8 +160,11 @@ def main(args):
             model = model.to(device)
             tokenizer = model.tokenizer
             class_len_per_prompt = 81
-            dataset_classes = get_data_classes(args.data_source)
-            #dataset_classes = ['diningtable']
+            if args.class_name == '':
+                dataset_classes = get_data_classes(args.data_source)
+            else:
+                dataset_classes = [args.class_name]                
+            # dataset_classes = ['diningtable']            
             text_prompt_list, positive_map_list = get_text_prompt_list_for_g_dino_with_classes(dataset_classes, tokenizer, class_len_per_prompt)
             res = Trainer.test(cfg, model, args, text_prompt_list, positive_map_list, dataset_classes)
         else:
